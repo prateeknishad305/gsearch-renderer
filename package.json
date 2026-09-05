@@ -13,8 +13,8 @@
   },
   "license": "MIT",
   "dependencies": {
-    "@sparticuz/chromium": "^130.0.0",
+    "@sparticuz/chromium": "^149.0.0",
     "got": "^11.8.6",
-    "playwright-core": "^1.48.0"
+    "playwright-core": "^1.63.0"
   }
 }

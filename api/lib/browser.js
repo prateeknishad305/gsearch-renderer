@@ -1,7 +1,8 @@
 'use strict';
 
 const { chromium } = require('playwright-core');
-const chromiumBin = require('@sparticuz/chromium');
+const chromiumMod = require('@sparticuz/chromium');
+const chromiumBin = chromiumMod.default || chromiumMod;
 
 let browserPromise = null;
 
