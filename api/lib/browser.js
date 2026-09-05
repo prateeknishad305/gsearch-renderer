@@ -1,17 +1,38 @@
 'use strict';
 
-const { chromium } = require('playwright-core');
-const chromiumMod = require('@sparticuz/chromium');
-const chromiumBin = chromiumMod.default || chromiumMod;
+// @sparticuz/chromium ships a compressed Chromium that works inside Vercel's
+// serverless functions (Amazon Linux 2023). We keep a single browser instance
+// across warm invocations to avoid paying the cold-start cost on every request.
+//
+// Both dependencies are required lazily (not at module top level) so that a
+// load/extraction failure surfaces as a normal error inside the handler and is
+// returned as JSON instead of crashing the function during module evaluation.
+
+let chromiumMod = null;
+let playwright = null;
+
+function loadChromium() {
+  if (!chromiumMod) {
+    const mod = require('@sparticuz/chromium');
+    chromiumMod = mod.default || mod;
+  }
+  return chromiumMod;
+}
+
+function loadPlaywright() {
+  if (!playwright) {
+    playwright = require('playwright-core').chromium;
+  }
+  return playwright;
+}
 
 let browserPromise = null;
 
-// @sparticuz/chromium ships a compressed Chromium that works inside Vercel's
-// serverless functions. We keep a single browser instance across warm
-// invocations to avoid paying the cold-start cost on every request.
 async function getBrowser() {
   if (!browserPromise) {
-    browserPromise = chromium
+    const chromiumBin = loadChromium();
+    const pw = loadPlaywright();
+    browserPromise = pw
       .launch({
         args: chromiumBin.args,
         executablePath: await chromiumBin.executablePath(),
