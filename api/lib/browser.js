@@ -11,9 +11,11 @@
 let chromiumMod = null;
 let playwright = null;
 
-function loadChromium() {
+// @sparticuz/chromium v140+ is ESM-only. Use dynamic import() so this works on
+// any Node runtime, including ones without require(esm) support.
+async function loadChromium() {
   if (!chromiumMod) {
-    const mod = require('@sparticuz/chromium');
+    const mod = await import('@sparticuz/chromium');
     chromiumMod = mod.default || mod;
   }
   return chromiumMod;
@@ -30,7 +32,7 @@ let browserPromise = null;
 
 async function getBrowser() {
   if (!browserPromise) {
-    const chromiumBin = loadChromium();
+    const chromiumBin = await loadChromium();
     const pw = loadPlaywright();
     browserPromise = pw
       .launch({
