@@ -99,7 +99,12 @@ module.exports = async (req, res) => {
 
   const q = String(req.query.q || '').trim();
   if (!q) {
-    return send(res, { error: 'Missing required query parameter "q"', http_status: 400 });
+    return send(res, {
+      service: 'gsearch-renderer',
+      ok: true,
+      usage: 'GET /api/search?q=<query>&engine=<google|bing|brave|mojeek|startpage|yahoo|duckduckgo|duckduckgo_lite|qwant>&num=&start=&hl=&gl=&proxy=',
+      note: 'Headless-Chromium SERP renderer fallback for gsearch-api. Set RENDERER_URL on gsearch-api to this deployment.',
+    });
   }
   if (q.length > 512) {
     return send(res, { error: 'Query too long (max 512 chars)', http_status: 400 });
