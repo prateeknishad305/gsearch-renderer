@@ -31,33 +31,74 @@ function loadPlaywright() {
   return playwright;
 }
 
+const STEALTH_ARGS = ['--disable-blink-features=AutomationControlled', '--no-first-run'];
+
 async function launchBrowser() {
   const chromiumBin = await loadChromium();
   const pw = loadPlaywright();
   return pw.launch({
-    args: chromiumBin.args,
+    args: [...chromiumBin.args, ...STEALTH_ARGS],
     executablePath: await chromiumBin.executablePath(),
     headless: true,
+    // Playwright injects --enable-automation by default; dropping it removes a
+    // well-known "this is a bot" signal in the browser itself.
+    ignoreDefaultArgs: ['--enable-automation'],
   });
 }
 
+// Fallback only. The real UA is derived from the launched Chromium version so
+// the claimed Chrome major always matches the engine actually running (a
+// mismatch, e.g. Chrome/125 UA over Chromium 149, is an easy bot tell).
 const DESKTOP_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 
+async function resolveUA(browser, fallback) {
+  try {
+    const ver = await browser.version(); // e.g. "HeadlessChrome/149.0.6324.32"
+    const m = String(ver).match(/(\d+)\.[\d.]+/);
+    if (m) {
+      return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${m[1]}.0.0.0 Safari/537.36`;
+    }
+  } catch {
+    /* ignore */
+  }
+  return fallback;
+}
+
+// Hides common automation fingerprints. Runs before any page script.
+function stealthMarkup() {
+  try {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+  } catch {}
+  try {
+    window.chrome = window.chrome || {};
+    window.chrome.runtime = window.chrome.runtime || {};
+  } catch {}
+  try {
+    const q = navigator.permissions && navigator.permissions.query;
+    if (q) {
+      navigator.permissions.query = (p) =>
+        p && p.name === 'notifications'
+          ? Promise.resolve({ state: Notification.permission })
+          : q.call(navigator.permissions, p);
+    }
+  } catch {}
+}
+
 async function newSearchContext({ proxy }) {
   const browser = await launchBrowser();
+  const ua = await resolveUA(browser, DESKTOP_UA);
   const opts = {
     locale: 'en-US',
     timezoneId: 'America/New_York',
-    userAgent: DESKTOP_UA,
+    userAgent: ua,
     viewport: { width: 1366, height: 900 },
-    extraHTTPHeaders: {
-      'accept-language': 'en-US,en;q=0.9',
-    },
+    colorScheme: 'light',
   };
   if (proxy) opts.proxy = { server: proxy };
   try {
     const context = await browser.newContext(opts);
+    await context.addInitScript(stealthMarkup);
     return { browser, context };
   } catch (err) {
     await browser.close().catch(() => {});

@@ -232,9 +232,13 @@ const ENGINES = {
   google: {
     url: ({ q, num, start, hl, gl }) =>
       `https://www.google.com/search?${new URLSearchParams({ q, num: String(num), start: String(start), hl, gl }).toString()}`,
-    cookies: ({ hl }) => {
+    cookies: () => {
       const stamp = Date.now().toString(36);
-      return [{ name: 'CONSENT', value: `YES+cb.20210328-17-p0.en+FX+${stamp}`, domain: '.google.com', path: '/' }];
+      return [
+        { name: 'CONSENT', value: `YES+cb.20210328-17-p0.en+FX+${stamp}`, domain: '.google.com', path: '/' },
+        // SOCS=CAI opts out of the EU consent wall in a Google-issued format.
+        { name: 'SOCS', value: 'CAI', domain: '.google.com', path: '/' },
+      ];
     },
     ready: 'h3',
     parse: parseGoogle,

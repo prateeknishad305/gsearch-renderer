@@ -26,6 +26,18 @@ async function renderSearch({ engine, query, num = 20, start = 0, hl = 'en', gl 
       await context.addCookies(cfg.cookies({ hl, gl }));
     }
 
+    // Google fingerprints fresh sessions harder. Visit the homepage once first
+    // so the server issues its own real cookies/state before the search hits,
+    // instead of only trusting pre-forged CONSENT/SOCS values.
+    if (engine === 'google') {
+      await page
+        .goto(`https://www.google.com/?hl=${encodeURIComponent(hl)}&gl=${encodeURIComponent(gl)}`, {
+          waitUntil: 'domcontentloaded',
+          timeout: 12000,
+        })
+        .catch(() => {});
+    }
+
     const t0 = Date.now();
     let navError = null;
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS }).catch((err) => {
