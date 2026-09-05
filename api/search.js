@@ -16,7 +16,7 @@ async function renderSearch({ engine, query, num = 20, start = 0, hl = 'en', gl 
   }
 
   const url = cfg.url({ q: query, num, start, hl, gl });
-  const context = await newSearchContext({ proxy });
+  const { browser, context } = await newSearchContext({ proxy });
   const page = await context.newPage();
   page.setDefaultTimeout(NAV_TIMEOUT_MS);
   page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
@@ -74,6 +74,7 @@ async function renderSearch({ engine, query, num = 20, start = 0, hl = 'en', gl 
     return { results: clean, duration_ms: Date.now() - t0 };
   } finally {
     await context.close().catch(() => {});
+    await browser.close().catch(() => {});
   }
 }
 

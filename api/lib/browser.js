@@ -1,8 +1,11 @@
 'use strict';
 
 // @sparticuz/chromium ships a compressed Chromium that works inside Vercel's
-// serverless functions (Amazon Linux 2023). We keep a single browser instance
-// across warm invocations to avoid paying the cold-start cost on every request.
+// serverless functions (Amazon Linux 2023). The binary is extracted to
+// /tmp/chromium once and reused across invocations while the sandbox stays
+// warm, but the browser process itself does not survive between invocations
+// (Vercel reaps child processes after the response), so we launch a fresh
+// browser for every request and close it before returning.
 //
 // Both dependencies are required lazily (not at module top level) so that a
 // load/extraction failure surfaces as a normal error inside the handler and is
@@ -28,31 +31,21 @@ function loadPlaywright() {
   return playwright;
 }
 
-let browserPromise = null;
-
-async function getBrowser() {
-  if (!browserPromise) {
-    const chromiumBin = await loadChromium();
-    const pw = loadPlaywright();
-    browserPromise = pw
-      .launch({
-        args: chromiumBin.args,
-        executablePath: await chromiumBin.executablePath(),
-        headless: true,
-      })
-      .catch((err) => {
-        browserPromise = null;
-        throw err;
-      });
-  }
-  return browserPromise;
+async function launchBrowser() {
+  const chromiumBin = await loadChromium();
+  const pw = loadPlaywright();
+  return pw.launch({
+    args: chromiumBin.args,
+    executablePath: await chromiumBin.executablePath(),
+    headless: true,
+  });
 }
 
 const DESKTOP_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 
 async function newSearchContext({ proxy }) {
-  const browser = await getBrowser();
+  const browser = await launchBrowser();
   const opts = {
     locale: 'en-US',
     timezoneId: 'America/New_York',
@@ -63,7 +56,13 @@ async function newSearchContext({ proxy }) {
     },
   };
   if (proxy) opts.proxy = { server: proxy };
-  return browser.newContext(opts);
+  try {
+    const context = await browser.newContext(opts);
+    return { browser, context };
+  } catch (err) {
+    await browser.close().catch(() => {});
+    throw err;
+  }
 }
 
-module.exports = { getBrowser, newSearchContext, DESKTOP_UA };
+module.exports = { launchBrowser, newSearchContext, DESKTOP_UA };
