@@ -77,7 +77,20 @@ async function renderSearch({ engine, query, num = 20, start = 0, hl = 'en', gl 
       .slice(0, num);
 
     if (clean.length === 0) {
-      const reason = navError ? `navigation failed: ${navError.message}` : 'no result nodes found after render';
+      let excerpt = '';
+      if (!navError) {
+        try {
+          excerpt = (
+            await page.evaluate(() => (document.body ? document.body.innerText : '').replace(/\s+/g, ' ').trim())
+          )
+            .slice(0, 240);
+        } catch {
+          /* ignore */
+        }
+      }
+      const reason = navError
+        ? `navigation failed: ${navError.message}`
+        : `no result nodes found after render${excerpt ? ` (page text: ${excerpt})` : ''}`;
       const e = new Error(`Engine "${engine}" returned no results after browser render (${reason}).`);
       e.code = 'EMPTY_RESULTS';
       throw e;
