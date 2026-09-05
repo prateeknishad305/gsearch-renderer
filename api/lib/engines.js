@@ -5,14 +5,7 @@
 // be fully self-contained (no references to module scope).
 
 function parseGoogle() {
-  const results = [];
-  const seen = new Set();
-  document.querySelectorAll('h3').forEach((h3) => {
-    const title = (h3.textContent || '').trim();
-    if (!title) return;
-    const a = h3.closest('a[href]');
-    if (!a) return;
-    let href = a.getAttribute('href') || '';
+  function resolveUrl(href) {
     let url = href;
     if (href.startsWith('/url?q=')) {
       try {
@@ -22,16 +15,47 @@ function parseGoogle() {
         /* ignore */
       }
     }
-    if (!/^https?:\/\//i.test(url) || seen.has(url)) return;
+    return url;
+  }
+  const NAV_TOKENS = new Set([
+    'ai mode', 'all', 'images', 'videos', 'news', 'shopping', 'maps', 'books',
+    'forums', 'more', 'tools', 'settings', 'privacy', 'sign in', 'sign out',
+    'web result', 'search results',
+  ]);
+  const region = document.querySelector('#search, #main, #rso') || document;
+  const results = [];
+  const seen = new Set();
+
+  // Primary: heading nodes (h3 / aria-level=3), current and classic layouts.
+  for (const h of region.querySelectorAll('h3, [role="heading"][aria-level="3"]')) {
+    const title = (h.textContent || '').trim();
+    if (!title || title.length < 3 || NAV_TOKENS.has(title.toLowerCase())) continue;
+    const a = h.closest('a[href]') || (h.parentElement && h.parentElement.querySelector('a[href]'));
+    if (!a) continue;
+    const url = resolveUrl(a.getAttribute('href') || '');
+    if (!/^https?:\/\//i.test(url) || /^https?:\/\/(www\.)?google\./i.test(url) || seen.has(url)) continue;
     let snippet = '';
-    const container = h3.closest('div.g, div[data-sncf], div[jscontroller]') || a.parentElement;
+    const container = h.closest('div.g, div[data-sncf], div[jscontroller], div[data-hveid], li') || a.parentElement;
     if (container) {
       const s = container.querySelector('div.VwiC3b, div[data-sncf], span.aCOpRe, div.MUxGbd, div[data-content-feature="1"]');
       if (s) snippet = (s.textContent || '').trim();
     }
     seen.add(url);
     results.push({ title, url, snippet });
-  });
+  }
+
+  // Fallback: layouts that render titles without h3/role=heading (new UI).
+  if (results.length === 0) {
+    for (const a of region.querySelectorAll('a[href]')) {
+      const url = resolveUrl(a.getAttribute('href') || '');
+      if (!/^https?:\/\//i.test(url) || /^https?:\/\/(www\.)?google\./i.test(url) || seen.has(url)) continue;
+      const title = (a.textContent || '').trim();
+      if (!title || title.length < 3 || title.length > 200 || NAV_TOKENS.has(title.toLowerCase())) continue;
+      if (a.closest('nav, header, form, [role="navigation"], [role="banner"]')) continue;
+      seen.add(url);
+      results.push({ title, url, snippet: '' });
+    }
+  }
   return results;
 }
 

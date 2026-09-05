@@ -82,8 +82,14 @@ async function renderSearch({ engine, query, num = 20, start = 0, hl = 'en', gl 
         try {
           excerpt = (
             await page.evaluate(() => (document.body ? document.body.innerText : '').replace(/\s+/g, ' ').trim())
-          )
-            .slice(0, 240);
+          ).slice(0, 240);
+          if (engine === 'google') {
+            const dom = await page.evaluate(() => {
+              const el = document.querySelector('#search, #rso, #main');
+              return el ? el.innerHTML.replace(/\s+/g, ' ').slice(0, 900) : '';
+            });
+            if (dom) excerpt += ` | dom: ${dom}`;
+          }
         } catch {
           /* ignore */
         }
