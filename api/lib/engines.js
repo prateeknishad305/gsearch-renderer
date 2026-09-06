@@ -20,8 +20,19 @@ function parseGoogle() {
   const NAV_TOKENS = new Set([
     'ai mode', 'all', 'images', 'videos', 'news', 'shopping', 'maps', 'books',
     'forums', 'more', 'tools', 'settings', 'privacy', 'sign in', 'sign out',
-    'web result', 'search results',
+    'web result', 'search results', 'learn more', 'help', 'terms', 'about',
+    'advertising', 'business', 'feedback', 'cookies', 'search settings',
+    'how search works', 'your data in search', 'see more',
+    'claim this knowledge panel', 'sign in to customize',
   ]);
+  const isGoogleHost = (url) => {
+    try {
+      const h = new URL(url).hostname;
+      return h === 'google.com' || h.endsWith('.google.com');
+    } catch {
+      return false;
+    }
+  };
   const region = document.querySelector('#search, #main, #rso') || document;
   const results = [];
   const seen = new Set();
@@ -33,7 +44,7 @@ function parseGoogle() {
     const a = h.closest('a[href]') || (h.parentElement && h.parentElement.querySelector('a[href]'));
     if (!a) continue;
     const url = resolveUrl(a.getAttribute('href') || '');
-    if (!/^https?:\/\//i.test(url) || /^https?:\/\/(www\.)?google\./i.test(url) || seen.has(url)) continue;
+    if (!/^https?:\/\//i.test(url) || isGoogleHost(url) || seen.has(url)) continue;
     let snippet = '';
     const container = h.closest('div.g, div[data-sncf], div[jscontroller], div[data-hveid], li') || a.parentElement;
     if (container) {
@@ -48,7 +59,7 @@ function parseGoogle() {
   if (results.length === 0) {
     for (const a of region.querySelectorAll('a[href]')) {
       const url = resolveUrl(a.getAttribute('href') || '');
-      if (!/^https?:\/\//i.test(url) || /^https?:\/\/(www\.)?google\./i.test(url) || seen.has(url)) continue;
+      if (!/^https?:\/\//i.test(url) || isGoogleHost(url) || seen.has(url)) continue;
       const title = (a.textContent || '').trim();
       if (!title || title.length < 3 || title.length > 200 || NAV_TOKENS.has(title.toLowerCase())) continue;
       if (a.closest('nav, header, form, [role="navigation"], [role="banner"]')) continue;
