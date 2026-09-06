@@ -265,6 +265,9 @@ const ENGINES = {
       ];
     },
     ready: 'h3',
+    // Google lazy-renders more results on scroll; do a scroll-and-reparse pass
+    // when the first pass comes back empty.
+    scroll: 2,
     parse: parseGoogle,
   },
   bing: {

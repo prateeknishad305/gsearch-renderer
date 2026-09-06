@@ -68,13 +68,20 @@ async function renderSearch({ engine, query, num = 20, start = 0, hl = 'en', gl 
       throw e;
     }
 
-    let results = [];
+    let clean = [];
     if (!navError) {
-      results = await page.evaluate(cfg.parse).catch(() => []);
+      // Some engines (Google) lazy-render results on scroll and may need a
+      // second pass before the page is fully hydrated.
+      for (let pass = 0; pass <= (cfg.scroll || 0); pass++) {
+        const results = await page.evaluate(cfg.parse).catch(() => []);
+        clean = (Array.isArray(results) ? results : [])
+          .filter((r) => r && /^https?:\/\//i.test(r.url || '') && (r.title || '').trim());
+        if (clean.length > 0 || pass === (cfg.scroll || 0)) break;
+        await page.evaluate(() => window.scrollBy(0, window.innerHeight * 2));
+        await page.waitForTimeout(800);
+      }
+      clean = clean.slice(0, num);
     }
-    const clean = (Array.isArray(results) ? results : [])
-      .filter((r) => r && /^https?:\/\//i.test(r.url || '') && (r.title || '').trim())
-      .slice(0, num);
 
     if (clean.length === 0) {
       let excerpt = '';

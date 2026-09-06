@@ -71,6 +71,10 @@ function stealthMarkup() {
     Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
   } catch {}
   try {
+    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+  } catch {}
+  try {
     window.chrome = window.chrome || {};
     window.chrome.runtime = window.chrome.runtime || {};
   } catch {}
