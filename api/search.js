@@ -1,7 +1,7 @@
 'use strict';
 
 const { newSearchContext } = require('./lib/browser');
-const { ENGINES, names, detectBlock } = require('./lib/engines');
+const { ENGINES, names, detectBlock, resolveGoogleRedirects } = require('./lib/engines');
 
 const MAX_NUM = 100;
 const NAV_TIMEOUT_MS = 25000;
@@ -73,7 +73,10 @@ async function renderSearch({ engine, query, num = 20, start = 0, hl = 'en', gl 
       // Some engines (Google) lazy-render results on scroll and may need a
       // second pass before the page is fully hydrated.
       for (let pass = 0; pass <= (cfg.scroll || 0); pass++) {
-        const results = await page.evaluate(cfg.parse).catch(() => []);
+        let results = await page.evaluate(cfg.parse).catch(() => []);
+        if (engine === 'google') {
+          results = await resolveGoogleRedirects(context, results, num * 2);
+        }
         clean = (Array.isArray(results) ? results : [])
           .filter((r) => r && /^https?:\/\//i.test(r.url || '') && (r.title || '').trim());
         if (clean.length > 0 || pass === (cfg.scroll || 0)) break;

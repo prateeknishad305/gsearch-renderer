@@ -17,6 +17,11 @@ function parseGoogle() {
     }
     return url;
   }
+  // "/goto?url=..." links carry a signed token (no plaintext destination) and
+  // resolve server-side via a 302. parseGoogle keeps them as-is and a Node-side
+  // step follows the redirect to recover the real URL. "/url?q=..." links are
+  // decoded immediately.
+  const isGoogleRel = (href) => /^\/(?:goto|url)\?/.test(href);
   const NAV_TOKENS = new Set([
     'ai mode', 'all', 'images', 'videos', 'news', 'shopping', 'maps', 'books',
     'forums', 'more', 'tools', 'settings', 'privacy', 'sign in', 'sign out',
@@ -43,27 +48,33 @@ function parseGoogle() {
     if (!title || title.length < 3 || NAV_TOKENS.has(title.toLowerCase())) continue;
     const a = h.closest('a[href]') || (h.parentElement && h.parentElement.querySelector('a[href]'));
     if (!a) continue;
-    const url = resolveUrl(a.getAttribute('href') || '');
-    if (!/^https?:\/\//i.test(url) || isGoogleHost(url) || seen.has(url)) continue;
+    const rawHref = a.getAttribute('href') || '';
+    const url = resolveUrl(rawHref);
+    if (!isGoogleRel(rawHref) && (!/^https?:\/\//i.test(url) || isGoogleHost(url))) continue;
+    const key = url || rawHref;
+    if (seen.has(key)) continue;
     let snippet = '';
     const container = h.closest('div.g, div[data-sncf], div[jscontroller], div[data-hveid], li') || a.parentElement;
     if (container) {
       const s = container.querySelector('div.VwiC3b, div[data-sncf], span.aCOpRe, div.MUxGbd, div[data-content-feature="1"]');
       if (s) snippet = (s.textContent || '').trim();
     }
-    seen.add(url);
+    seen.add(key);
     results.push({ title, url, snippet });
   }
 
   // Fallback: layouts that render titles without h3/role=heading (new UI).
   if (results.length === 0) {
     for (const a of region.querySelectorAll('a[href]')) {
-      const url = resolveUrl(a.getAttribute('href') || '');
-      if (!/^https?:\/\//i.test(url) || isGoogleHost(url) || seen.has(url)) continue;
+      const rawHref = a.getAttribute('href') || '';
+      const url = resolveUrl(rawHref);
+      if (!isGoogleRel(rawHref) && (!/^https?:\/\//i.test(url) || isGoogleHost(url))) continue;
+      const key = url || rawHref;
+      if (seen.has(key)) continue;
       const title = (a.textContent || '').trim();
       if (!title || title.length < 3 || title.length > 200 || NAV_TOKENS.has(title.toLowerCase())) continue;
       if (a.closest('nav, header, form, [role="navigation"], [role="banner"]')) continue;
-      seen.add(url);
+      seen.add(key);
       results.push({ title, url, snippet: '' });
     }
   }
@@ -430,4 +441,40 @@ function detectBlock(engine) {
   return null;
 }
 
-module.exports = { ENGINES, names, detectBlock };
+// Follows Google "/goto?url=..." redirect links server-side to recover the real
+// destination URL. /goto is a plain 302 chain, so no JS is required — but the
+// browser context's own cookies/UA are used so the redirect behaves like the
+// page's real click. Items whose URL is already absolute are left untouched.
+async function resolveGoogleRedirects(context, results, limit = 20) {
+  const pending = (Array.isArray(results) ? results : [])
+    .filter((r) => r && /^\/(?:goto|url)\?/.test(r.url || ''))
+    .slice(0, limit);
+  if (pending.length === 0) return results;
+
+  const resolved = new Map();
+  await Promise.all(
+    pending.map(async (r, i) => {
+      const href = r.url;
+      try {
+        const resp = await context.request.get(`https://www.google.com${href}`, {
+          maxRedirects: 5,
+          timeout: 10000,
+        });
+        const finalUrl = resp.url();
+        if (/^https?:\/\//i.test(finalUrl)) resolved.set(href, finalUrl);
+      } catch {
+        // Fall through; item dropped by caller when no URL was resolved.
+      }
+    })
+  );
+
+  return results
+    .map((r) => {
+      if (!r || !/^\/(?:goto|url)\?/.test(r.url || '')) return r;
+      const real = resolved.get(r.url);
+      return real ? { ...r, url: real } : null;
+    })
+    .filter(Boolean);
+}
+
+module.exports = { ENGINES, names, detectBlock, resolveGoogleRedirects };
