@@ -99,7 +99,12 @@ async function newSearchContext({ proxy }) {
     viewport: { width: 1366, height: 900 },
     colorScheme: 'light',
   };
-  if (proxy) opts.proxy = { server: proxy };
+  if (proxy) {
+    // Split embedded credentials out of the URL: Chromium's network service
+    // fails CONNECT with 407 unless credentials are passed as explicit
+    // username/password options rather than only inside the server URL.
+    opts.proxy = parseProxy(proxy);
+  }
   try {
     const context = await browser.newContext(opts);
     await context.addInitScript(stealthMarkup);
@@ -110,4 +115,17 @@ async function newSearchContext({ proxy }) {
   }
 }
 
-module.exports = { launchBrowser, newSearchContext, DESKTOP_UA };
+// "http://user:pass@host:port" -> { server, username, password }
+function parseProxy(proxy) {
+  try {
+    const u = new URL(proxy);
+    const out = { server: `${u.protocol}//${u.host}` };
+    if (u.username) out.username = decodeURIComponent(u.username);
+    if (u.password) out.password = decodeURIComponent(u.password);
+    return out;
+  } catch {
+    return { server: proxy };
+  }
+}
+
+module.exports = { launchBrowser, newSearchContext, DESKTOP_UA, parseProxy };
