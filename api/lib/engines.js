@@ -190,15 +190,19 @@ function parseYahoo() {
   }
   const results = [];
   const seen = new Set();
-  document.querySelectorAll('ol.reg > li.first, ol.reg li.first').forEach((li) => {
-    const h3 = li.querySelector('h3, div.compTitle');
+  // Organic results are div.algo blocks (the exact class token, so helper
+  // "algo-favicon" chips and the ads rows are excluded). Title must come from
+  // the <h3>, not the whole anchor, or the visible URL gets concatenated onto
+  // it ("ChatGPThttps://chatgpt.comChatGPT: ...").
+  document.querySelectorAll('div.algo, li.algo').forEach((block) => {
+    const h3 = block.querySelector('h3');
     if (!h3) return;
-    const a = h3.querySelector('a[href]') || li.querySelector('a[href^="http"]');
+    const a = h3.closest('a[href]') || h3.querySelector('a[href]');
     if (!a) return;
-    const title = (a.textContent || '').trim();
+    const title = (h3.textContent || '').trim();
     const url = decodeHref(a.getAttribute('href') || '');
     if (!title || !/^https?:\/\//i.test(url) || seen.has(url)) return;
-    const s = li.querySelector('.compText, div.compText, p');
+    const s = block.querySelector('.compText, div.compText');
     const snippet = s ? (s.textContent || '').trim() : '';
     seen.add(url);
     results.push({ title, url, snippet });
@@ -267,13 +271,16 @@ function parseDuckDuckGoLite() {
 function parseQwant() {
   const NAV_EXCLUDE = new Set([
     'home', 'search', 'news', 'images', 'videos', 'maps', 'settings', 'privacy',
-    'about', 'contact', 'help', 'sign in', 'login', 'explore', 'apps',
+    'privacy policy', 'about', 'about us', 'contact', 'help', 'sign in', 'login',
+    'explore', 'apps', 'terms', 'terms of service', 'legal', 'imprint', 'cookies',
+    'manage cookies', 'facebook', 'twitter', 'instagram', 'youtube', 'linkedin',
   ]);
   const results = [];
   const seen = new Set();
   document.querySelectorAll('a[href]').forEach((a) => {
     const url = a.getAttribute('href') || '';
     if (!/^https?:\/\//i.test(url) || seen.has(url)) return;
+    if (a.closest('nav, header, footer, [role="navigation"], [role="banner"], [role="contentinfo"]')) return;
     const title = (a.textContent || '').trim();
     if (!title || title.length < 3 || NAV_EXCLUDE.has(title.toLowerCase())) return;
     seen.add(url);
@@ -386,7 +393,7 @@ function detectBlock(engine) {
     brave: '.snippet',
     mojeek: 'ul.results-standard li',
     startpage: '.w-gl__result, .result',
-    yahoo: 'ol.reg li.first',
+    yahoo: 'div.algo, li.algo',
     duckduckgo: '#links .result',
     duckduckgo_lite: 'a.result-link',
     qwant: 'a[href^="http"]',
