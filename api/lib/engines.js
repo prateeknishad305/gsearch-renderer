@@ -41,6 +41,11 @@ function parseGoogle() {
   const region = document.querySelector('#search, #main, #rso') || document;
   const results = [];
   const seen = new Set();
+  // Site-link cards put several <h3> under ONE block that carries a single
+  // .VwiC3b. Only the first heading of such a card should take that snippet —
+  // the rest are deep links without their own description. Tracking snippet
+  // elements by identity (a DOM node is consumed once) handles any nesting.
+  const usedSnippets = new WeakSet();
 
   // Primary: heading nodes (h3 / aria-level=3), current and classic layouts.
   for (const h of region.querySelectorAll('h3, [role="heading"][aria-level="3"]')) {
@@ -57,7 +62,10 @@ function parseGoogle() {
     const container = h.closest('div.g, div[data-sncf], div[jscontroller], div[data-hveid], li') || a.parentElement;
     if (container) {
       const s = container.querySelector('div.VwiC3b, div[data-sncf], span.aCOpRe, div.MUxGbd, div[data-content-feature="1"]');
-      if (s) snippet = (s.textContent || '').trim();
+      if (s && !usedSnippets.has(s)) {
+        snippet = (s.textContent || '').trim();
+        usedSnippets.add(s);
+      }
     }
     seen.add(key);
     results.push({ title, url, snippet });
