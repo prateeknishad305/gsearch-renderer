@@ -117,7 +117,14 @@ async function renderSearch({ engine, query, num = 20, start = 0, hl = 'en', gl 
       debugHtml = await page
         .evaluate(() => {
           const el = document.querySelector('#search, #rso, #main');
-          return el ? el.innerHTML.replace(/\s+/g, ' ').slice(0, 8000) : '';
+          if (!el) return '';
+          const cards = [];
+          const heads = el.querySelectorAll('h3, [role="heading"][aria-level="3"]');
+          for (let i = 0; i < Math.min(heads.length, 3); i++) {
+            const c = heads[i].closest('div[data-hveid], li, div.g');
+            if (c) cards.push(c.outerHTML.replace(/\s+/g, ' ').slice(0, 5000));
+          }
+          return JSON.stringify({ full: el.innerHTML.replace(/\s+/g, ' ').slice(0, 4000), cards });
         })
         .catch(() => '');
     }
