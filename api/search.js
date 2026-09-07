@@ -7,7 +7,7 @@ const MAX_NUM = 100;
 const NAV_TIMEOUT_MS = 25000;
 const READY_TIMEOUT_MS = 15000;
 
-async function renderSearch({ engine, query, num = 20, start = 0, hl = 'en', gl = 'us', proxy }) {
+async function renderSearch({ engine, query, num = 20, start = 0, hl = 'en', gl = 'us', proxy, debug }) {
   const cfg = ENGINES[engine];
   if (!cfg) {
     const e = new Error(`Unknown engine "${engine}". Available: ${names().join(', ')}`);
@@ -112,7 +112,17 @@ async function renderSearch({ engine, query, num = 20, start = 0, hl = 'en', gl 
       throw e;
     }
 
-    return { results: clean, duration_ms: Date.now() - t0 };
+    let debugHtml = '';
+    if (debug && !navError) {
+      debugHtml = await page
+        .evaluate(() => {
+          const el = document.querySelector('#search, #rso, #main');
+          return el ? el.innerHTML.replace(/\s+/g, ' ').slice(0, 8000) : '';
+        })
+        .catch(() => '');
+    }
+
+    return { results: clean, duration_ms: Date.now() - t0, debugHtml };
   } finally {
     await context.close().catch(() => {});
     await browser.close().catch(() => {});
@@ -164,17 +174,20 @@ module.exports = async (req, res) => {
   const hl = String(req.query.hl || 'en').slice(0, 8);
   const gl = String(req.query.gl || 'us').slice(0, 8);
   const proxy = String(req.query.proxy || '').trim();
+  const debug = req.query.debug === '1';
 
   try {
-    const { results, duration_ms } = await renderSearch({ engine, query: q, num, start, hl, gl, proxy });
-    return send(res, {
+    const { results, duration_ms, debugHtml } = await renderSearch({ engine, query: q, num, start, hl, gl, proxy, debug });
+    const body = {
       engine,
       query: q,
       success: true,
       count: results.length,
       results,
       duration_ms,
-    });
+    };
+    if (debugHtml) body.debug_html = debugHtml;
+    return send(res, body);
   } catch (err) {
     return send(res, {
       engine,
