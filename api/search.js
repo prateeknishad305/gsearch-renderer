@@ -1,5 +1,8 @@
 'use strict';
 
+const fs = require('fs');
+const path = require('path');
+
 const { newSearchContext } = require('./lib/browser');
 const { ENGINES, names, detectBlock, resolveGoogleRedirects } = require('./lib/engines');
 
@@ -145,15 +148,34 @@ function send(res, body) {
 
 // Reads a newline/comma separated list of proxy URLs from the PROXY_POOL env
 // var. Lines may be "# comment"-prefixed. Each entry is a full proxy URL, e.g.
-// "http://user:pass@host:port" or "http://host:port".
-function getProxyPool() {
-  const raw = String(process.env.PROXY_POOL || '').trim();
-  if (!raw) return [];
-  return raw
+// "http://user:pass@host:port" or "http://host:port". If the env var is empty,
+// falls back to the committed ./proxies.txt file (repo must be kept private).
+function splitPool(raw) {
+  return String(raw || '')
     .split(/[\n,]/)
     .map((s) => s.trim())
     .filter((s) => s && !s.startsWith('#'))
     .filter((s) => /^https?:\/\//i.test(s) || /^[^/@:]+:\d+$/.test(s));
+}
+function getProxyPool() {
+  const envPool = String(process.env.PROXY_POOL || '').trim();
+  if (envPool) return splitPool(envPool);
+  const candidates = [
+    process.env.PROXY_POOL_FILE,
+    path.join(__dirname, 'proxies.txt'),
+    path.join(__dirname, '..', 'proxies.txt'),
+    path.join(process.cwd(), 'proxies.txt'),
+  ].filter(Boolean);
+  for (const file of candidates) {
+    try {
+      const raw = fs.readFileSync(file, 'utf8');
+      const pool = splitPool(raw);
+      if (pool.length) return pool;
+    } catch {
+      /* try next candidate */
+    }
+  }
+  return [];
 }
 
 function intEnv(name, dflt) {

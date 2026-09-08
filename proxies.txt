@@ -1,0 +1,28 @@
+# Proxies for gsearch-renderer rotation (HTTP). One per line.
+# Passed to Chromium via newSearchContext; proxied requests run over HTTP/1.1.
+http://799JRELTBPAE:F7BQ7D3EQSQA@175.29.133.8:5433
+http://purevpn0s13884209:!f7%242qE7TPT%7B@px040805.pointtoserver.com:10780
+http://purevpn0s14339918:8%266VAgb1RjH5@prox-us.ptoserver.com:10780
+http://1353:%26G9c58vcIZA2@p103.squidproxies.com:9095
+http://g2rTXpNfPdcw2fzGtWKp62yH:nizar1elad2@ca-mon.pvdata.host:8080
+http://purevpn0s8732217:i67s60ep@px031901.pointtoserver.com:10780
+http://1439:jqvFsDEZ%26%25Sm@p102.squidproxies.com:9292
+http://g2rTXpNfPdcw2fzGtWKp62yH:nizar1elad2@pl-tor.pvdata.host:8080
+http://vbeqiwyg:96it2i8scf4v@45.38.107.97:6014
+http://fhbnslah:dx4ibhexolc4@31.59.20.176:6754
+http://tickets:proxyon145@181.215.16.247:12345
+http://wtdbcqjy:skbx930jfhzl@31.59.20.176:6754
+http://tickets:proxyon145@50.3.137.177:12345
+http://tickets:proxyon145@107.173.112.211:12345
+http://tickets:proxyon145@181.177.102.240:12345
+http://tickets:proxyon145@107.150.71.197:12345
+http://tickets:proxyon145@104.160.17.116:12345
+http://tickets:proxyon145@107.150.71.30:12345
+http://tickets:proxyon145@168.228.46.189:12345
+http://tickets:proxyon145@161.0.1.119:12345
+http://190.12.150.244:999
+http://wxzilbix:0nbi8jsk0w2m@142.111.67.146:5611
+http://ogsgbxmb:lhjpiv9k360a@64.137.96.74:6641
+http://p2s_proxy:oazaCentric@quebec.oaza.rs:8899
+http://noupjayd:s5kdjtq9nexo@191.96.254.138:6185
+http://ogsgbxmb:lhjpiv9k360a@45.38.107.97:6014
