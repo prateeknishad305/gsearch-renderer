@@ -20,6 +20,23 @@ gsearch-api scrapes search engines with plain HTTP. Some engines (Google, DuckDu
 | `gl`     | `us`     | Country |
 | `proxy`  | `""`     | Optional browser proxy (e.g. `http://user:pass@host:port`) |
 
+#### Proxy rotation (env vars)
+
+Instead of passing `proxy=` per request, set a pool on the deployment. Every request
+then picks a random member and, if that exit is blocked (e.g. a Google `/sorry`
+interstitial), retries with another member before falling back to a direct request.
+
+| Env var                  | Default | Description |
+|--------------------------|---------|-------------|
+| `PROXY_POOL`             | *(none)* | Newline **or** comma separated proxy URLs (`http://user:pass@host:port`). Lines starting with `#` are ignored. |
+| `PROXY_ATTEMPTS`         | `3`     | Max pool members tried per request |
+| `PROXY_FALLBACK_DIRECT`  | `1`     | Set to `0` to disable the final direct (no proxy) attempt |
+| `PROXY_WINDOW_MS`        | `42000` | Hard time budget for all attempts combined |
+
+Note: proxied requests force Chromium to HTTP/1.1 (`--disable-http2`). Several HTTP
+proxy providers (PureVPN/pointtoserver, PVData, squid proxies, ...) silently stall
+Chromium's HTTP/2 connections to Google while HTTP/1.1 works fine.
+
 Success:
 
 ```json

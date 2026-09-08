@@ -7,7 +7,7 @@ const MAX_NUM = 100;
 const NAV_TIMEOUT_MS = 25000;
 const READY_TIMEOUT_MS = 15000;
 
-async function renderSearch({ engine, query, num = 20, start = 0, hl = 'en', gl = 'us', proxy, debug }) {
+async function attemptSearch({ engine, query, num = 20, start = 0, hl = 'en', gl = 'us', proxy, debug }) {
   const cfg = ENGINES[engine];
   if (!cfg) {
     const e = new Error(`Unknown engine "${engine}". Available: ${names().join(', ')}`);
@@ -143,6 +143,55 @@ function send(res, body) {
   return res.status(body.http_status || 200).json(body);
 }
 
+// Reads a newline/comma separated list of proxy URLs from the PROXY_POOL env
+// var. Lines may be "# comment"-prefixed. Each entry is a full proxy URL, e.g.
+// "http://user:pass@host:port" or "http://host:port".
+function getProxyPool() {
+  const raw = String(process.env.PROXY_POOL || '').trim();
+  if (!raw) return [];
+  return raw
+    .split(/[\n,]/)
+    .map((s) => s.trim())
+    .filter((s) => s && !s.startsWith('#'))
+    .filter((s) => /^https?:\/\//i.test(s) || /^[^/@:]+:\d+$/.test(s));
+}
+
+function intEnv(name, dflt) {
+  const v = parseInt(process.env[name], 10);
+  return Number.isFinite(v) && v > 0 ? v : dflt;
+}
+
+// Public entry point: applies proxy rotation. When the caller does not pass an
+// explicit proxy= and PROXY_POOL is configured, it tries a few random pool
+// members (each failure like a Google /sorry interstitial just moves to the
+// next exit IP) and finally falls back to a direct request. When an explicit
+// proxy is given, exactly one attempt is made with it (same as before).
+async function renderSearch(opts) {
+  const explicitProxy = opts.proxy;
+  const tries = [];
+  if (explicitProxy) {
+    tries.push(explicitProxy);
+  } else {
+    const pool = getProxyPool().sort(() => Math.random() - 0.5);
+    const picks = Math.min(pool.length, intEnv('PROXY_ATTEMPTS', 3));
+    for (let i = 0; i < picks; i++) tries.push(pool[i]);
+    if (String(process.env.PROXY_FALLBACK_DIRECT) !== '0' || tries.length === 0) tries.push(null);
+  }
+
+  const deadline = Date.now() + intEnv('PROXY_WINDOW_MS', 42000);
+  let lastErr = new Error('no search attempt could be made');
+  for (let i = 0; i < tries.length; i++) {
+    if (Date.now() > deadline) break;
+    try {
+      return await attemptSearch({ ...opts, proxy: tries[i] });
+    } catch (err) {
+      lastErr = err;
+      if (err && err.code === 'UNKNOWN_ENGINE') throw err; // validation, not retryable
+    }
+  }
+  throw lastErr;
+}
+
 module.exports = async (req, res) => {
   if (req.method === 'OPTIONS') {
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -161,7 +210,7 @@ module.exports = async (req, res) => {
       service: 'gsearch-renderer',
       ok: true,
       usage: 'GET /api/search?q=<query>&engine=<google|bing|brave|mojeek|startpage|yahoo|duckduckgo|duckduckgo_lite|qwant>&num=&start=&hl=&gl=&proxy=',
-      note: 'Headless-Chromium SERP renderer fallback for gsearch-api. Set RENDERER_URL on gsearch-api to this deployment.',
+      note: 'Headless-Chromium SERP renderer fallback for gsearch-api. Set RENDERER_URL on gsearch-api to this deployment. Optional PROXY_POOL env (comma/newline proxy URLs) enables per-request rotation; PROXY_ATTEMPTS and PROXY_FALLBACK_DIRECT tune retries. Proxy requests run over HTTP/1.1 (some proxy providers stall Chromium HTTP/2 to Google).',
     });
   }
   if (q.length > 512) {

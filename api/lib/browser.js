@@ -33,11 +33,17 @@ function loadPlaywright() {
 
 const STEALTH_ARGS = ['--disable-blink-features=AutomationControlled', '--no-first-run'];
 
-async function launchBrowser() {
+// Some HTTP proxy providers (PureVPN/pointtoserver, PVData, squid proxies...)
+// mishandle Chromium's HTTP/2 towards Google and the connection silently
+// stalls (curl h2 works, so it is a Chromium-h2-specific path bug). Falling
+// back to HTTP/1.1 only when a proxy is in play keeps direct connections on h2
+// while making proxied Google requests complete.
+async function launchBrowser({ disableHttp2 = false } = {}) {
   const chromiumBin = await loadChromium();
   const pw = loadPlaywright();
+  const extra = disableHttp2 ? ['--disable-http2'] : [];
   return pw.launch({
-    args: [...chromiumBin.args, ...STEALTH_ARGS],
+    args: [...chromiumBin.args, ...STEALTH_ARGS, ...extra],
     executablePath: await chromiumBin.executablePath(),
     headless: true,
     // Playwright injects --enable-automation by default; dropping it removes a
@@ -90,7 +96,7 @@ function stealthMarkup() {
 }
 
 async function newSearchContext({ proxy }) {
-  const browser = await launchBrowser();
+  const browser = await launchBrowser({ disableHttp2: !!proxy });
   const ua = await resolveUA(browser, DESKTOP_UA);
   const opts = {
     locale: 'en-US',
