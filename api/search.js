@@ -195,12 +195,12 @@ async function renderSearch(opts) {
     tries.push(explicitProxy);
   } else {
     const pool = getProxyPool().sort(() => Math.random() - 0.5);
-    const picks = Math.min(pool.length, intEnv('PROXY_ATTEMPTS', 3));
+    const picks = Math.min(pool.length, intEnv('PROXY_ATTEMPTS', 2));
     for (let i = 0; i < picks; i++) tries.push(pool[i]);
     if (String(process.env.PROXY_FALLBACK_DIRECT) !== '0' || tries.length === 0) tries.push(null);
   }
 
-  const deadline = Date.now() + intEnv('PROXY_WINDOW_MS', 42000);
+  const deadline = Date.now() + intEnv('PROXY_WINDOW_MS', 28000);
   let lastErr = new Error('no search attempt could be made');
   for (let i = 0; i < tries.length; i++) {
     if (Date.now() > deadline) break;
