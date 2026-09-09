@@ -5,6 +5,18 @@ const path = require('path');
 
 const { newSearchContext } = require('./lib/browser');
 const { ENGINES, names, detectBlock, resolveGoogleRedirects } = require('./lib/engines');
+const { fastLiteSearch } = require('./lib/lite');
+
+// Engines that have a plain-HTTP fast path. Turn the whole feature off with
+// env LITE_FAST=0, or skip per-engine with LITE_FAST_<ENGINE>=0.
+const LITE_ENGINES = new Set(['duckduckgo', 'duckduckgo_lite']);
+function liteEnabled(engine) {
+  return (
+    LITE_ENGINES.has(engine) &&
+    String(process.env.LITE_FAST || '1') !== '0' &&
+    String(process.env[`LITE_FAST_${engine.toUpperCase()}`] || '1') !== '0'
+  );
+}
 
 const MAX_NUM = 100;
 const NAV_TIMEOUT_MS = 25000;
@@ -189,6 +201,31 @@ function intEnv(name, dflt) {
 // next exit IP) and finally falls back to a direct request. When an explicit
 // proxy is given, exactly one attempt is made with it (same as before).
 async function renderSearch(opts) {
+  const started = Date.now();
+  const { engine } = opts;
+
+  // Fast path: tolerant engines can be scraped over plain HTTP in ~1s. When the
+  // lite page is clean but empty (rare), return an empty success immediately so
+  // the caller's engine-fallback kicks in fast instead of burning a full
+  // Chromium render. On BLOCKED/network errors we fall through to the normal
+  // proxy + Chromium rotation below.
+  if (!opts.proxy && !opts.debug && liteEnabled(engine)) {
+    try {
+      return await fastLiteSearch({
+        engine,
+        query: opts.query,
+        num: opts.num,
+        hl: opts.hl,
+        gl: opts.gl,
+      });
+    } catch (err) {
+      if (err && err.code === 'EMPTY_RESULTS') {
+        return { results: [], duration_ms: Date.now() - started };
+      }
+      // BLOCKED / LITE_* -> fall through to Chromium rotation below.
+    }
+  }
+
   const explicitProxy = opts.proxy;
   const tries = [];
   if (explicitProxy) {
