@@ -201,7 +201,6 @@ function intEnv(name, dflt) {
 // next exit IP) and finally falls back to a direct request. When an explicit
 // proxy is given, exactly one attempt is made with it (same as before).
 async function renderSearch(opts) {
-  const started = Date.now();
   const { engine } = opts;
 
   // Fast path: tolerant engines can be scraped over plain HTTP in ~1s. When the
@@ -211,18 +210,16 @@ async function renderSearch(opts) {
   // proxy + Chromium rotation below.
   if (!opts.proxy && !opts.debug && liteEnabled(engine)) {
     try {
-      return await fastLiteSearch({
+      const lite = await fastLiteSearch({
         engine,
         query: opts.query,
         num: opts.num,
         hl: opts.hl,
         gl: opts.gl,
       });
+      if (lite.results && lite.results.length) return lite;
     } catch (err) {
-      if (err && err.code === 'EMPTY_RESULTS') {
-        return { results: [], duration_ms: Date.now() - started };
-      }
-      // BLOCKED / LITE_* -> fall through to Chromium rotation below.
+      // BLOCKED / EMPTY_RESULTS / LITE_* -> fall through to Chromium rotation.
     }
   }
 
