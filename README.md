@@ -6,32 +6,72 @@ Headless Chromium SERP renderer for [gsearch-api](https://github.com/prateeknish
 
 gsearch-api scrapes search engines with plain HTTP. Some engines (Google, DuckDuckGo, Brave, Startpage, Qwant) return a JS-required gate, consent page, or challenge to datacenter/cloud IPs like Vercel's. This service renders those pages in a real headless Chromium, executes the JavaScript, and returns parsed results in the same shape gsearch-api expects.
 
-## Endpoint
+## Endpoints
 
 ### `GET /api/search`
 
-| Param    | Default  | Description |
-|----------|----------|-------------|
-| `q`      | required | Search query |
-| `engine` | `google` | One of: `google`, `bing`, `brave`, `mojeek`, `startpage`, `yahoo`, `duckduckgo`, `duckduckgo_lite`, `qwant` |
-| `num`    | `20`     | Target results (max `100`) |
-| `start`  | `0`      | Pagination offset |
-| `hl`     | `en`     | Interface language |
-| `gl`     | `us`     | Country |
-| `proxy`  | `""`     | Optional browser proxy (e.g. `http://user:pass@host:port`) |
+| Param     | Default  | Description |
+|-----------|----------|-------------|
+| `q`       | required | Search query |
+| `engine`  | `google` | Single engine (back-compat) |
+| `engines` | *(none)* | Comma list tried in order; first engine that returns results wins (e.g. `google,bing`). Takes precedence over `engine`. |
+| `num`     | `20`     | Target results per page (max `100`) |
+| `pages`   | `1`      | Fetch and merge up to `5` result pages per query (more URLs per dork) |
+| `start`   | `0`      | Pagination offset |
+| `hl`      | `en`     | Interface language |
+| `gl`      | `us`     | Country |
+| `proxy`   | `""`     | Optional browser proxy (e.g. `http://user:pass@host:port`) |
+| `nocache` | `0`      | Set to `1` to bypass the results cache |
+| `debug`   | `0`      | Set to `1` to skip the lite path/cache and include `debug_html` |
+| `token`   | *(none)* | API token when `API_TOKEN` is set on the deployment |
 
-#### Proxy rotation (env vars)
+Engines: `google`, `bing`, `brave`, `mojeek`, `startpage`, `yahoo`, `duckduckgo`, `duckduckgo_lite`, `qwant`.
+
+### `POST /api/batch`
+
+Run several dorks in **one** HTTP call on the shared pooled browser. This amortises
+container warm-up and avoids the per-request concurrency limits of serverless.
+
+```json
+{ "queries": ["inurl:index.php?id=", "inurl:product.php?cat="], "engines": "google,bing", "num": 20, "pages": 1 }
+```
+
+Response: `{ success, batch_size, completed, duration_ms, pool, results: [{ query, success, engine, count, results }] }`.
+`BATCH_MAX` (default `6`) caps queries per call; `BATCH_BUDGET_MS` (default `50000`)
+stops early so the function returns before the timeout (remaining queries get
+`code: "TIME_BUDGET"`).
+
+### `GET /api/health`
+
+Cheap introspection for a load balancer / the operator: `pool` (shard config),
+`browser` (reuse + active/queued contexts), `cache` stats, `engines`, `features`.
+
+#### Rotation & scaling (env vars)
 
 Instead of passing `proxy=` per request, set a pool on the deployment. Every request
-then picks a random member and, if that exit is blocked (e.g. a Google `/sorry`
+picks a random member and, if that exit is blocked (e.g. a Google `/sorry`
 interstitial), retries with another member before falling back to a direct request.
 
 | Env var                  | Default | Description |
 |--------------------------|---------|-------------|
 | `PROXY_POOL`             | *(none)* | Newline **or** comma separated proxy URLs (`http://user:pass@host:port`). Lines starting with `#` are ignored. |
-| `PROXY_ATTEMPTS`         | `3`     | Max pool members tried per request |
+| `PROXY_ATTEMPTS`         | `2`     | Max pool members tried per page |
 | `PROXY_FALLBACK_DIRECT`  | `1`     | Set to `0` to disable the final direct (no proxy) attempt |
-| `PROXY_WINDOW_MS`        | `42000` | Hard time budget for all attempts combined |
+| `PROXY_WINDOW_MS`        | `28000` | Time budget per page (multiplied by `pages`) |
+| `PROXY_SHARD_TOTAL`      | `1`     | Split the pool across N instances (host 10 APIs -> `10`) |
+| `PROXY_SHARD_INDEX`      | `0`     | This instance's shard (`0..N-1`) — each gets a disjoint slice |
+
+| Env var             | Default | Description |
+|---------------------|---------|-------------|
+| `BROWSER_REUSE`     | `1`     | Reuse a long-lived Chromium per process (big win on containers; a no-op on Vercel where browsers are reaped). `0` = one browser per request. |
+| `BROWSER_IDLE_MS`   | `120000`| Close an idle pooled browser after this long |
+| `MAX_CONTEXTS`      | `4`     | Max concurrent tabs per instance (bounds memory) |
+| `CACHE_TTL_MS`      | `300000`| Results cache TTL (`0` disables) |
+| `CACHE_MAX`         | `500`   | Max cached queries |
+| `LITE_FAST`         | `1`     | Plain-HTTP fast path for DuckDuckGo engines (`0` disables) |
+| `BATCH_MAX`         | `6`     | Max queries per `POST /api/batch` |
+| `BATCH_BUDGET_MS`   | `50000` | Batch wall-clock budget |
+| `API_TOKEN`         | *(none)*| When set, require `Authorization: Bearer <token>` or `?token=` |
 
 Note: proxied requests force Chromium to HTTP/1.1 (`--disable-http2`). Several HTTP
 proxy providers (PureVPN/pointtoserver, PVData, squid proxies, ...) silently stall
@@ -66,10 +106,25 @@ Failure (upstream block / no results — always HTTP 200, never a 502):
 
 ## Deploy
 
+### Vercel (serverless)
+
 1. Push this repo to GitHub.
 2. In the Vercel dashboard: **Add New Project** -> import this repo.
 3. Settings -> Functions -> set **Max Duration** to `60` (or higher if you have a paid plan) and **Memory** to `1024`.
 4. Deploy. The URL becomes your `RENDERER_URL`.
+
+### Hosted containers (recommended for volume)
+
+For 10k+ dorks per run, run the renderer as a long-lived container (Fly.io,
+Railway, Render, a VPS...) instead of serverless: set `BROWSER_REUSE=1` and the
+pooled Chromium is reused across requests, removing the per-query launch cost.
+
+Scaling horizontally: host N instances, give each the **same** `PROXY_POOL` but a
+distinct `PROXY_SHARD_INDEX` and the shared `PROXY_SHARD_TOTAL=N`. Each instance
+then uses a disjoint slice of the pool so two instances never hit Google from the
+same exit IP, and a client round-robins across the instance URLs. Put any HTTP
+load balancer (or the client itself) in front and set `API_TOKEN` if the instances
+are reachable from the public internet.
 
 ## Use from gsearch-api
 

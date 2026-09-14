@@ -134,4 +134,11 @@ function parseProxy(proxy) {
   }
 }
 
-module.exports = { launchBrowser, newSearchContext, DESKTOP_UA, parseProxy };
+module.exports = {
+  launchBrowser,
+  newSearchContext,
+  DESKTOP_UA,
+  parseProxy,
+  stealthMarkup,
+  resolveUA,
+};
