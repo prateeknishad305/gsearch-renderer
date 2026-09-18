@@ -2,6 +2,8 @@
   "version": 2,
   "rewrites": [
     { "source": "/", "destination": "/api/search" },
-    { "source": "/health", "destination": "/api/search" }
+    { "source": "/search", "destination": "/api/search" },
+    { "source": "/batch", "destination": "/api/batch" },
+    { "source": "/health", "destination": "/api/health" }
   ]
 }

@@ -1,28 +1,16 @@
 'use strict';
 
-// @sparticuz/chromium ships a compressed Chromium that works inside Vercel's
-// serverless functions (Amazon Linux 2023). The binary is extracted to
-// /tmp/chromium once and reused across invocations while the sandbox stays
-// warm, but the browser process itself does not survive between invocations
-// (Vercel reaps child processes after the response), so we launch a fresh
-// browser for every request and close it before returning.
+// Chromium is resolved per platform:
+//   Vercel  -> @sparticuz/chromium (serverless binary)
+//   Docker / Railway / Render / local with Chrome installed -> system Chromium
+//   fallback -> @sparticuz/chromium
 //
-// Both dependencies are required lazily (not at module top level) so that a
-// load/extraction failure surfaces as a normal error inside the handler and is
-// returned as JSON instead of crashing the function during module evaluation.
+// Both Chromium and Playwright are required lazily so a load/extraction failure
+// surfaces as a normal JSON error instead of crashing module evaluation.
 
-let chromiumMod = null;
+const { resolveLaunch } = require('./chromium');
+
 let playwright = null;
-
-// @sparticuz/chromium v140+ is ESM-only. Use dynamic import() so this works on
-// any Node runtime, including ones without require(esm) support.
-async function loadChromium() {
-  if (!chromiumMod) {
-    const mod = await import('@sparticuz/chromium');
-    chromiumMod = mod.default || mod;
-  }
-  return chromiumMod;
-}
 
 function loadPlaywright() {
   if (!playwright) {
@@ -39,15 +27,13 @@ const STEALTH_ARGS = ['--disable-blink-features=AutomationControlled', '--no-fir
 // back to HTTP/1.1 only when a proxy is in play keeps direct connections on h2
 // while making proxied Google requests complete.
 async function launchBrowser({ disableHttp2 = false } = {}) {
-  const chromiumBin = await loadChromium();
+  const launch = await resolveLaunch();
   const pw = loadPlaywright();
   const extra = disableHttp2 ? ['--disable-http2'] : [];
   return pw.launch({
-    args: [...chromiumBin.args, ...STEALTH_ARGS, ...extra],
-    executablePath: await chromiumBin.executablePath(),
+    args: [...launch.args, ...STEALTH_ARGS, ...extra],
+    executablePath: launch.executablePath,
     headless: true,
-    // Playwright injects --enable-automation by default; dropping it removes a
-    // well-known "this is a bot" signal in the browser itself.
     ignoreDefaultArgs: ['--enable-automation'],
   });
 }

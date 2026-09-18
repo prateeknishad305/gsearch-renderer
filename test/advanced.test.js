@@ -12,6 +12,14 @@ test('splitPool parses newline/comma lists and drops comments', () => {
   assert.deepStrictEqual(pool, ['http://a:1', 'http://b:2', 'http://c:3']);
 });
 
+test('splitPool accepts host:port:user:pass live-list format', () => {
+  const pool = splitPool('1.2.3.4:8081:user_name:p==ass\n# skip\n5.6.7.8:80');
+  assert.deepStrictEqual(pool, [
+    `http://${encodeURIComponent('user_name')}:${encodeURIComponent('p==ass')}@1.2.3.4:8081`,
+    'http://5.6.7.8:80',
+  ]);
+});
+
 test('shardPool partitions disjointly and covers everything', () => {
   const pool = ['p0', 'p1', 'p2', 'p3', 'p4'];
   const a = shardPool(pool, 0, 2);

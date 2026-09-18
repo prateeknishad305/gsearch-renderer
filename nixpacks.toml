@@ -1,0 +1,20 @@
+[phases.setup]
+aptPkgs = [
+  "chromium",
+  "fonts-liberation",
+  "fonts-noto-core",
+  "libnss3",
+  "libatk-bridge2.0-0",
+  "libgtk-3-0",
+  "libgbm1",
+  "libasound2",
+  "ca-certificates",
+]
+
+[start]
+cmd = "node server.js"
+
+[variables]
+CHROMIUM_SOURCE = "system"
+CHROMIUM_PATH = "/usr/bin/chromium"
+BROWSER_REUSE = "1"

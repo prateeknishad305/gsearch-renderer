@@ -8,15 +8,23 @@ function intEnv(name, dflt) {
   return Number.isFinite(v) && v > 0 ? v : dflt;
 }
 
+function normalizeProxy(s) {
+  const line = String(s || '').trim();
+  if (!line || line.startsWith('#')) return null;
+  if (/^https?:\/\//i.test(line)) return line;
+  if (/^[^/@:\s]+:\d+$/.test(line)) return `http://${line}`;
+  const m = line.match(/^([^/@:\s]+):(\d+):([^:\s]+):(.+)$/);
+  if (!m) return null;
+  return `http://${encodeURIComponent(m[3])}:${encodeURIComponent(m[4])}@${m[1]}:${m[2]}`;
+}
+
 // Reads a newline/comma separated list of proxy URLs. Lines may be "# comment"-
-// prefixed. Each entry is a full proxy URL, e.g. "http://user:pass@host:port"
-// or "http://host:port".
+// prefixed. Accepts http(s)://user:pass@host:port, host:port, or host:port:user:pass.
 function splitPool(raw) {
   return String(raw || '')
     .split(/[\n,]/)
-    .map((s) => s.trim())
-    .filter((s) => s && !s.startsWith('#'))
-    .filter((s) => /^https?:\/\//i.test(s) || /^[^/@:]+:\d+$/.test(s));
+    .map(normalizeProxy)
+    .filter(Boolean);
 }
 
 // Keeps only every Nth entry. Used to give each hosted API instance its own
@@ -72,4 +80,4 @@ function poolInfo() {
   };
 }
 
-module.exports = { splitPool, shardPool, getProxyPool, getShardPool, poolInfo, intEnv };
+module.exports = { splitPool, shardPool, getProxyPool, getShardPool, poolInfo, intEnv, normalizeProxy };

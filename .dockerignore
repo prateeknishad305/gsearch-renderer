@@ -1,0 +1,16 @@
+node_modules
+.git
+.vercel
+.env
+.env.*
+*.log
+diag*.js
+launch-test.js
+render-test.js
+single-test.js
+test
+README.md
+Dockerfile
+.dockerignore
+railway.toml
+render.yaml

@@ -1,14 +1,16 @@
 {
   "name": "gsearch-renderer",
-  "version": "1.0.0",
-  "description": "Headless Chromium SERP renderer for gsearch-api (Vercel serverless).",
-  "main": "api/search.js",
+  "version": "1.1.0",
+  "description": "Headless Chromium SERP renderer for gsearch-api. Runs on Vercel, Railway, Render, Docker, and local machines.",
+  "main": "server.js",
   "type": "commonjs",
   "engines": {
     "node": ">=20"
   },
   "scripts": {
-    "dev": "vercel dev",
+    "start": "node server.js",
+    "dev": "node server.js",
+    "dev:vercel": "vercel dev",
     "test": "node --test test/*.test.js"
   },
   "license": "MIT",

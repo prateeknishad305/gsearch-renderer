@@ -4,7 +4,8 @@ const { names } = require('./lib/engines');
 const { poolInfo } = require('./lib/proxyPool');
 const { stats: browserStats } = require('./lib/browserPool');
 const { getCache } = require('./lib/cache');
-const { send, cors, authOk, unauthorized } = require('./lib/http');
+const { runtimeInfo } = require('./lib/chromium');
+const { send, cors } = require('./lib/http');
 
 // GET /api/health - cheap liveness/rotation introspection for load balancers
 // and for the operator to confirm which proxy shard an instance owns.
@@ -16,13 +17,12 @@ module.exports = async (req, res) => {
   if (req.method !== 'GET') {
     return send(res, { error: 'Method not allowed', http_status: 405 });
   }
-  if (!authOk(req)) return unauthorized(res);
-
   return send(res, {
     service: 'gsearch-renderer',
     ok: true,
     uptime_s: Math.round(process.uptime()),
     node: process.version,
+    runtime: runtimeInfo(),
     engines: names(),
     pool: poolInfo(),
     browser: browserStats(),

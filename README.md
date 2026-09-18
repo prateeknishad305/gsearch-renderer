@@ -1,6 +1,6 @@
 # gsearch-renderer
 
-Headless Chromium SERP renderer for [gsearch-api](https://github.com/prateeknishad305/gsearch-api). Runs on Vercel serverless functions using `playwright-core` + `@sparticuz/chromium`.
+Headless Chromium SERP renderer for [gsearch-api](https://github.com/prateeknishad305/gsearch-api). Runs on Vercel serverless, Railway, Render, Docker, and local machines. Chromium is auto-detected: `@sparticuz/chromium` on Vercel, system Chrome/Chromium everywhere else.
 
 ## Why
 
@@ -106,6 +106,59 @@ Failure (upstream block / no results — always HTTP 200, never a 502):
 
 ## Deploy
 
+Same HTTP API on every host. Set `PORT` (Railway/Render inject this) and start with `node server.js`. `GET /api/health` is public so platform health checks work even when `API_TOKEN` is set. Give the container at least 1 GB RAM; Chromium will not stay healthy on tiny free plans.
+
+### Local machine
+
+Install Node 20+ and Chrome or Chromium, then:
+
+```
+# Install dependencies
+npm install
+
+# Start the long-lived HTTP server (default PORT=3000)
+npm start
+
+# Optional: copy env template
+cp .env.example .env
+```
+
+```
+curl "http://localhost:3000/api/health"
+curl "http://localhost:3000/api/search?q=hello+world&engine=google"
+```
+
+If Chrome/Chromium is installed, it is used automatically. Otherwise the process falls back to `@sparticuz/chromium`. Force a path with `CHROMIUM_PATH=/usr/bin/chromium` and `CHROMIUM_SOURCE=system`.
+
+Debian/Ubuntu:
+
+```
+# Install Chromium and Node
+sudo apt-get update
+sudo apt-get install -y chromium
+npm install
+npm start
+```
+
+macOS: install Google Chrome, then `npm start`.
+
+Windows: install Google Chrome, then `npm start`.
+
+Docker locally:
+
+```
+docker build -t gsearch-renderer .
+docker run --rm -p 3000:3000 gsearch-renderer
+```
+
+Or `docker compose up --build`.
+
+Vercel CLI is optional and only needed if you want the serverless emulator:
+
+```
+npm run dev:vercel
+```
+
 ### Vercel (serverless)
 
 1. Push this repo to GitHub.
@@ -113,11 +166,31 @@ Failure (upstream block / no results — always HTTP 200, never a 502):
 3. Settings -> Functions -> set **Max Duration** to `60` (or higher if you have a paid plan) and **Memory** to `1024`.
 4. Deploy. The URL becomes your `RENDERER_URL`.
 
+Vercel keeps using `api/*.js` serverless functions and `@sparticuz/chromium`. `server.js` is not used there.
+
+### Railway
+
+1. New Project -> Deploy from GitHub repo.
+2. Railway detects `Dockerfile` / `railway.toml` and builds the image (system Chromium included).
+3. Set env vars in the service: `API_TOKEN`, optional `PROXY_POOL`.
+4. Generate a public domain. Health check is `GET /api/health`.
+
+Start command is `node server.js`. Railway sets `PORT` automatically.
+
+If you deploy without Docker, `nixpacks.toml` installs Chromium via apt and still runs `node server.js`.
+
+### Render
+
+1. New -> Web Service -> this repo.
+2. Runtime: **Docker** (uses `Dockerfile` / `render.yaml`).
+3. Health check path: `/api/health`.
+4. Set `API_TOKEN` (and optional `PROXY_POOL`) in Environment.
+
+You can also use a native Node service: build `npm install`, start `node server.js`, and add a native Chromium buildpack or use the Docker path above. Docker is the reliable option because Chromium is baked into the image.
+
 ### Hosted containers (recommended for volume)
 
-For 10k+ dorks per run, run the renderer as a long-lived container (Fly.io,
-Railway, Render, a VPS...) instead of serverless: set `BROWSER_REUSE=1` and the
-pooled Chromium is reused across requests, removing the per-query launch cost.
+For 10k+ dorks per run, run the renderer as a long-lived container (Railway, Render, Fly.io, a VPS) instead of serverless: `BROWSER_REUSE=1` (default) reuses pooled Chromium across requests and removes the per-query launch cost.
 
 Scaling horizontally: host N instances, give each the **same** `PROXY_POOL` but a
 distinct `PROXY_SHARD_INDEX` and the shared `PROXY_SHARD_TOTAL=N`. Each instance
@@ -126,24 +199,27 @@ same exit IP, and a client round-robins across the instance URLs. Put any HTTP
 load balancer (or the client itself) in front and set `API_TOKEN` if the instances
 are reachable from the public internet.
 
+## Chromium selection
+
+| Env | Default | Description |
+|-----|---------|-------------|
+| `CHROMIUM_SOURCE` | `auto` | `auto` (Vercel -> sparticuz, else system if found), `system`, or `sparticuz` |
+| `CHROMIUM_PATH` | *(detected)* | Explicit Chrome/Chromium binary path |
+| `CHROMIUM_ARGS` | *(none)* | Extra Chromium flags, space-separated |
+| `PORT` | `3000` | HTTP port (`HOST` default `0.0.0.0`) |
+| `HOST` | `0.0.0.0` | Bind address for `server.js` |
+
+`GET /api/health` includes `runtime.platform` and `runtime.chromium_source` so you can confirm which binary an instance is using.
+
 ## Use from gsearch-api
 
-Set the env var on the gsearch-api Vercel project:
+Set the env var on the gsearch-api project to whatever host you deployed:
 
 ```
 RENDERER_URL=https://gsearch-renderer.vercel.app
 ```
 
+Examples: `https://<service>.up.railway.app`, `https://<service>.onrender.com`, `http://localhost:3000`.
+
 When set, gsearch-api automatically retries any engine that fails its native
 scrape (blocked / rate-limited / empty) through this renderer service.
-
-## Local dev
-
-```
-npm install
-vercel dev
-curl "http://localhost:3000/api/search?q=hello+world&engine=google"
-```
-
-Note: `@sparticuz/chromium` downloads its binary on first run; ensure your
-local system has the Chromium shared libraries (`libnss3`, etc.).

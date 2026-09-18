@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: gsearch-renderer
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: BROWSER_REUSE
+        value: "1"
+      - key: CHROMIUM_SOURCE
+        value: system
+      - key: API_TOKEN
+        sync: false
+      - key: PROXY_POOL
+        sync: false
