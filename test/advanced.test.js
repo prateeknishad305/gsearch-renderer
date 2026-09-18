@@ -12,6 +12,13 @@ test('splitPool parses newline/comma lists and drops comments', () => {
   assert.deepStrictEqual(pool, ['http://a:1', 'http://b:2', 'http://c:3']);
 });
 
+test('poolInfo reports fetcher metadata', () => {
+  const { poolInfo } = require('../api/lib/proxyPool');
+  const info = poolInfo();
+  assert.ok(info.fetcher);
+  assert.equal(info.fetcher.url, 'https://etherealproxyfetch.onrender.com/live.txt');
+});
+
 test('splitPool accepts host:port:user:pass live-list format', () => {
   const pool = splitPool('1.2.3.4:8081:user_name:p==ass\n# skip\n5.6.7.8:80');
   assert.deepStrictEqual(pool, [

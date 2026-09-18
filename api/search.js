@@ -26,6 +26,12 @@ function liteEnabled(engine) {
 // (bounded by PROXY_ATTEMPTS) followed by a direct attempt unless disabled.
 function buildTries(explicitProxy) {
   if (explicitProxy) return [explicitProxy];
+  try {
+    const { getLivePool, refreshLivePool } = require('./lib/proxyFetch');
+    if (!getLivePool().length) refreshLivePool().catch(() => {});
+  } catch {
+    /* ignore */
+  }
   const pool = getShardPool().sort(() => Math.random() - 0.5);
   const picks = Math.min(pool.length, intEnv('PROXY_ATTEMPTS', 2));
   const tries = pool.slice(0, picks);

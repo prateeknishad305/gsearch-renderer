@@ -54,7 +54,11 @@ interstitial), retries with another member before falling back to a direct reque
 
 | Env var                  | Default | Description |
 |--------------------------|---------|-------------|
-| `PROXY_POOL`             | *(none)* | Newline **or** comma separated proxy URLs (`http://user:pass@host:port`). Lines starting with `#` are ignored. |
+| `PROXY_POOL`             | *(none)* | Newline **or** comma separated proxy URLs (`http://user:pass@host:port`). Lines starting with `#` are ignored. When unset, live proxies are fetched, checked, and used. |
+| `PROXY_FETCH`            | `1`     | Fetch + check proxies from the hardcoded live list (`0` disables) |
+| `PROXY_FETCH_URL`        | `https://etherealproxyfetch.onrender.com/live.txt` | Override live-list URL |
+| `PROXY_LIVE_MIN`         | `8`     | Stop checking once this many proxies pass |
+| `PROXY_CHECK_MAX`        | `30`    | Max candidates probed per refresh |
 | `PROXY_ATTEMPTS`         | `2`     | Max pool members tried per page |
 | `PROXY_FALLBACK_DIRECT`  | `1`     | Set to `0` to disable the final direct (no proxy) attempt |
 | `PROXY_WINDOW_MS`        | `28000` | Time budget per page (multiplied by `pages`) |

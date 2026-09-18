@@ -33,6 +33,7 @@ module.exports = async (req, res) => {
       engine_fallback: true,
       pagination: true,
       batch: true,
+      proxy_fetch: String(process.env.PROXY_FETCH || '1') !== '0',
     },
   });
 };

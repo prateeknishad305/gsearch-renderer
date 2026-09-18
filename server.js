@@ -32,6 +32,7 @@ const { URL } = require('url');
 
 const { closeAll } = require('./api/lib/browserPool');
 const { detectPlatform } = require('./api/lib/chromium');
+const { startProxyFetcher, stopProxyFetcher } = require('./api/lib/proxyFetch');
 
 const searchHandler = require('./api/search');
 const batchHandler = require('./api/batch');
@@ -167,6 +168,7 @@ server.requestTimeout = 0;
 
 function shutdown(signal) {
   console.log(`[gsearch-renderer] ${signal} received, shutting down`);
+  stopProxyFetcher();
   server.close(() => {
     closeAll()
       .catch(() => {})
@@ -178,6 +180,7 @@ function shutdown(signal) {
 function listen() {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
+  startProxyFetcher();
   server.listen(PORT, HOST, () => {
     console.log(`[gsearch-renderer] listening on http://${HOST}:${PORT} (${detectPlatform()})`);
   });
