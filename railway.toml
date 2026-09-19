@@ -1,8 +1,13 @@
+# Railway: New Project -> Deploy from GitHub. This file selects the Dockerfile
+# (Chromium baked in), starts node server.js, and probes GET /api/health.
+# Railway injects PORT. Optional dashboard vars: API_TOKEN, PROXY_POOL.
+
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
+startCommand = "node server.js"
 healthcheckPath = "/api/health"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"

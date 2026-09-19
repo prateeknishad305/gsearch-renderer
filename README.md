@@ -1,6 +1,10 @@
 # gsearch-renderer
 
-Headless Chromium SERP renderer for [gsearch-api](https://github.com/prateeknishad305/gsearch-api). Runs on Vercel serverless, Railway, Render, Docker, and local machines. Chromium is auto-detected: `@sparticuz/chromium` on Vercel, system Chrome/Chromium everywhere else.
+Headless Chromium SERP renderer for [gsearch-api](https://github.com/prateeknishad305/gsearch-api).
+
+Host this anywhere: **Vercel, Railway, Render, Docker, a VPS, or your laptop**. Same HTTP API on every platform (`GET /api/search`, `POST /api/batch`, `GET /api/health`).
+
+Chromium is auto-detected: `@sparticuz/chromium` on Vercel serverless, system Chrome/Chromium on Railway / Render / Docker / local.
 
 ## Why
 
@@ -108,23 +112,35 @@ Failure (upstream block / no results — always HTTP 200, never a 502):
 }
 ```
 
-## Deploy
+## Deploy (any host)
 
-Same HTTP API on every host. Set `PORT` (Railway/Render inject this) and start with `node server.js`. `GET /api/health` is public so platform health checks work even when `API_TOKEN` is set. Give the container at least 1 GB RAM; Chromium will not stay healthy on tiny free plans.
+This repo is not Vercel-only. Long-lived hosts run `node server.js` (`npm start`). Vercel keeps using `api/*.js` serverless functions.
 
-### Local machine
+| Host | How it starts | Config files |
+|------|----------------|--------------|
+| Local | `npm start` | `.env.example` |
+| Docker / VPS | `docker compose up --build` | `Dockerfile`, `docker-compose.yml` |
+| Railway | Docker build from `railway.toml` | `railway.toml`, `Dockerfile` |
+| Render | Docker web service from `render.yaml` | `render.yaml`, `Dockerfile` |
+| Vercel | serverless `api/*.js` | `vercel.json` |
 
-Install Node 20+ and Chrome or Chromium, then:
+Give containers at least **1 GB RAM**. Chromium will not stay healthy on tiny free plans. `GET /api/health` is public so platform probes work even when `API_TOKEN` is set. Railway and Render inject `PORT`; the process binds `HOST=0.0.0.0`.
+
+Live proxies are fetched from `https://etherealproxyfetch.onrender.com/live.txt`, checked, and used automatically. Set `API_TOKEN` on any public URL.
+
+### 1. Local machine
+
+Need Node 20+ and Chrome/Chromium.
 
 ```
 # Install dependencies
 npm install
 
-# Start the long-lived HTTP server (default PORT=3000)
-npm start
-
-# Optional: copy env template
+# Optional env file
 cp .env.example .env
+
+# Start (listens on PORT, default 3000)
+npm start
 ```
 
 ```
@@ -132,76 +148,97 @@ curl "http://localhost:3000/api/health"
 curl "http://localhost:3000/api/search?q=hello+world&engine=google"
 ```
 
-If Chrome/Chromium is installed, it is used automatically. Otherwise the process falls back to `@sparticuz/chromium`. Force a path with `CHROMIUM_PATH=/usr/bin/chromium` and `CHROMIUM_SOURCE=system`.
+If Chrome/Chromium is installed it is used automatically. Otherwise the process falls back to `@sparticuz/chromium`. Force a path with `CHROMIUM_PATH=/usr/bin/chromium` and `CHROMIUM_SOURCE=system`.
 
-Debian/Ubuntu:
+Debian / Ubuntu:
 
 ```
-# Install Chromium and Node
 sudo apt-get update
 sudo apt-get install -y chromium
 npm install
 npm start
 ```
 
-macOS: install Google Chrome, then `npm start`.
+macOS / Windows: install Google Chrome, then `npm start`.
 
-Windows: install Google Chrome, then `npm start`.
+Vercel CLI is optional (serverless emulator only):
 
-Docker locally:
+```
+npm run dev:vercel
+```
+
+### 2. Docker (local or any VPS)
 
 ```
 docker build -t gsearch-renderer .
 docker run --rm -p 3000:3000 gsearch-renderer
 ```
 
-Or `docker compose up --build`.
-
-Vercel CLI is optional and only needed if you want the serverless emulator:
+Or:
 
 ```
-npm run dev:vercel
+docker compose up --build
 ```
 
-### Vercel (serverless)
+The image installs Chromium, runs as `node`, and health-checks `/api/health`. On a VPS, point a reverse proxy at port 3000 and set `API_TOKEN`.
+
+### 3. Railway (`railway.toml`)
+
+`railway.toml` is in the repo root. It tells Railway to build the **Dockerfile** (Chromium included), health-check `/api/health`, and restart on failure. Start command inside the image is `node server.js`. Railway sets `PORT` automatically.
+
+Process:
 
 1. Push this repo to GitHub.
-2. In the Vercel dashboard: **Add New Project** -> import this repo.
-3. Settings -> Functions -> set **Max Duration** to `60` (or higher if you have a paid plan) and **Memory** to `1024`.
-4. Deploy. The URL becomes your `RENDERER_URL`.
+2. [railway.app](https://railway.app) -> **New Project** -> **Deploy from GitHub repo** -> select this repo.
+3. Railway reads `railway.toml`:
+   - `builder = "DOCKERFILE"`
+   - `dockerfilePath = "Dockerfile"`
+   - `healthcheckPath = "/api/health"`
+4. Variables (optional): `API_TOKEN`, `PROXY_POOL` (leave unset to use the live proxy fetcher).
+5. Settings -> Networking -> **Generate domain**.
+6. Confirm:
 
-Vercel keeps using `api/*.js` serverless functions and `@sparticuz/chromium`. `server.js` is not used there.
+```
+curl "https://<your-service>.up.railway.app/api/health"
+```
 
-### Railway
+Use that URL as `RENDERER_URL` in gsearch-api.
 
-1. New Project -> Deploy from GitHub repo.
-2. Railway detects `Dockerfile` / `railway.toml` and builds the image (system Chromium included).
-3. Set env vars in the service: `API_TOKEN`, optional `PROXY_POOL`.
-4. Generate a public domain. Health check is `GET /api/health`.
+If you deploy **without** Docker (Nixpacks), `nixpacks.toml` installs Chromium via apt and still runs `node server.js`. Docker via `railway.toml` is the path that just works.
 
-Start command is `node server.js`. Railway sets `PORT` automatically.
+### 4. Render (`render.yaml`)
 
-If you deploy without Docker, `nixpacks.toml` installs Chromium via apt and still runs `node server.js`.
+`render.yaml` defines a Docker web service named `gsearch-renderer` with health check `/api/health`.
 
-### Render
+Process:
 
-1. New -> Web Service -> this repo.
-2. Runtime: **Docker** (uses `Dockerfile` / `render.yaml`).
-3. Health check path: `/api/health`.
-4. Set `API_TOKEN` (and optional `PROXY_POOL`) in Environment.
+1. Push this repo to GitHub.
+2. [render.com](https://render.com) -> **New** -> **Web Service** -> this repo.
+3. Runtime: **Docker** (uses `Dockerfile` / `render.yaml`).
+4. Health check path: `/api/health`.
+5. Environment: set `API_TOKEN`. Leave `PROXY_POOL` empty to use the live proxy fetcher.
+6. Deploy, then:
 
-You can also use a native Node service: build `npm install`, start `node server.js`, and add a native Chromium buildpack or use the Docker path above. Docker is the reliable option because Chromium is baked into the image.
+```
+curl "https://<your-service>.onrender.com/api/health"
+```
 
-### Hosted containers (recommended for volume)
+Native Node on Render is possible (`npm install` + `node server.js`) but you must supply Chromium yourself. Docker is the reliable option.
 
-For 10k+ dorks per run, run the renderer as a long-lived container (Railway, Render, Fly.io, a VPS) instead of serverless: `BROWSER_REUSE=1` (default) reuses pooled Chromium across requests and removes the per-query launch cost.
+### 5. Vercel (serverless)
 
-Scaling horizontally: host N instances, give each the **same** `PROXY_POOL` but a
-distinct `PROXY_SHARD_INDEX` and the shared `PROXY_SHARD_TOTAL=N`. Each instance
-then uses a disjoint slice of the pool so two instances never hit Google from the
-same exit IP, and a client round-robins across the instance URLs. Put any HTTP
-load balancer (or the client itself) in front and set `API_TOKEN` if the instances
-are reachable from the public internet.
+1. Push this repo to GitHub.
+2. Vercel dashboard -> **Add New Project** -> import this repo.
+3. Settings -> Functions -> **Max Duration** `60` (or higher on a paid plan), **Memory** `1024`.
+4. Deploy. That URL is your `RENDERER_URL`.
+
+Vercel uses `api/*.js` + `@sparticuz/chromium`. `server.js` / `railway.toml` / Docker are not used there.
+
+### Horizontal scale (Railway / Render / VPS)
+
+For 10k+ dorks per run, prefer a long-lived container (`BROWSER_REUSE=1`, default) over serverless.
+
+Host N instances with the same `PROXY_POOL` (or the live fetcher) but a distinct `PROXY_SHARD_INDEX` and shared `PROXY_SHARD_TOTAL=N`. Each instance gets a disjoint slice of exits. Put any HTTP load balancer in front and set `API_TOKEN` if the URLs are public.
 
 ## Chromium selection
 

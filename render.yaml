@@ -9,10 +9,16 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      - key: HOST
+        value: "0.0.0.0"
       - key: BROWSER_REUSE
         value: "1"
       - key: CHROMIUM_SOURCE
         value: system
+      - key: CHROMIUM_PATH
+        value: /usr/bin/chromium
+      - key: PROXY_FETCH
+        value: "1"
       - key: API_TOKEN
         sync: false
       - key: PROXY_POOL
