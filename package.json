@@ -1,7 +1,7 @@
 {
   "name": "gsearch-renderer",
   "version": "1.1.0",
-  "description": "Headless Chromium SERP renderer for gsearch-api. Runs on Vercel, Railway, Render, Docker, and local machines.",
+  "description": "Headless Chromium SERP renderer for gsearch-api. Runs on Vercel, Railway, Render, Docker, Windows RDP, and local machines.",
   "main": "server.js",
   "type": "commonjs",
   "engines": {

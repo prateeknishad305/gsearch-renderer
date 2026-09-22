@@ -2,7 +2,7 @@
 
 Headless Chromium SERP renderer for [gsearch-api](https://github.com/prateeknishad305/gsearch-api).
 
-Host this anywhere: **Vercel, Railway, Render, Docker, a VPS, or your laptop**. Same HTTP API on every platform (`GET /api/search`, `POST /api/batch`, `GET /api/health`).
+Host this anywhere: **Vercel, Railway, Render, Docker, a VPS, a Windows RDP server (24/7), or your laptop**. Same HTTP API on every platform (`GET /api/search`, `POST /api/batch`, `GET /api/health`).
 
 Chromium is auto-detected: `@sparticuz/chromium` on Vercel serverless, system Chrome/Chromium on Railway / Render / Docker / local.
 
@@ -119,6 +119,7 @@ This repo is not Vercel-only. Long-lived hosts run `node server.js` (`npm start`
 | Host | How it starts | Config files |
 |------|----------------|--------------|
 | Local | `npm start` | `.env.example` |
+| Windows RDP (24/7) | Windows service (`nssm`) running `node server.js` | `.env`, NSSM / Task Scheduler |
 | Docker / VPS | `docker compose up --build` | `Dockerfile`, `docker-compose.yml` |
 | Railway | Docker build from `railway.toml` | `railway.toml`, `Dockerfile` |
 | Render | Docker web service from `render.yaml` | `render.yaml`, `Dockerfile` |
@@ -234,7 +235,286 @@ Native Node on Render is possible (`npm install` + `node server.js`) but you mus
 
 Vercel uses `api/*.js` + `@sparticuz/chromium`. `server.js` / `railway.toml` / Docker are not used there.
 
-### Horizontal scale (Railway / Render / VPS)
+### 6. Windows RDP server (24/7)
+
+Run this as a **Windows service**, not in an RDP desktop window. If you only start `npm start` in Command Prompt and then disconnect RDP, Windows can kill that session. A service keeps Node + Chromium alive after disconnect and after reboot.
+
+Need: Windows Server 2016/2019/2022 or Windows 10/11, **2 GB RAM minimum** (4 GB better), public IP or LAN IP, Administrator access.
+
+#### Step 1. Connect over RDP
+
+On your PC:
+
+```
+mstsc
+```
+
+Computer: `YOUR_SERVER_IP`. Log in as Administrator (or a user with admin rights).
+
+#### Step 2. Stop sleep / hibernate (required for 24/7)
+
+Open **Command Prompt as Administrator**:
+
+```
+powercfg /change standby-timeout-ac 0
+powercfg /change standby-timeout-dc 0
+powercfg /change hibernate-timeout-ac 0
+powercfg /change hibernate-timeout-dc 0
+powercfg /hibernate off
+powercfg /SETACVALUEINDEX SCHEME_CURRENT SUB_SLEEP STANDBYIDLE 0
+powercfg /SETACTIVE SCHEME_CURRENT
+```
+
+Settings -> System -> Power -> Screen and sleep -> **Sleep: Never** (plugged in).
+
+#### Step 3. Install Node.js 22 LTS
+
+1. Open https://nodejs.org/
+2. Download **Windows Installer (.msi) 22 LTS x64**.
+3. Run it. Keep **Add to PATH** checked.
+4. Finish, then **close and reopen** Command Prompt.
+
+```
+node -v
+npm -v
+```
+
+Both must print versions. If `node` is not recognized, reboot once and try again.
+
+#### Step 4. Install Git
+
+1. Open https://git-scm.com/download/win
+2. Install with default options.
+3. New Command Prompt:
+
+```
+git --version
+```
+
+#### Step 5. Install Google Chrome
+
+1. Open https://www.google.com/chrome/
+2. Install Chrome for all users (default path below).
+3. Confirm the binary exists:
+
+```
+dir "C:\Program Files\Google\Chrome\Application\chrome.exe"
+```
+
+If Chrome is under `C:\Program Files (x86)\...`, use that path in `.env`.
+
+#### Step 6. Clone the repo
+
+```
+cd C:\
+mkdir apps
+cd C:\apps
+git clone https://github.com/prateeknishad305/gsearch-renderer.git
+cd gsearch-renderer
+```
+
+#### Step 7. Install npm packages
+
+```
+npm install
+```
+
+#### Step 8. Create `.env`
+
+```
+copy .env.example .env
+notepad .env
+```
+
+Set at least:
+
+```
+PORT=3000
+HOST=0.0.0.0
+NODE_ENV=production
+CHROMIUM_SOURCE=system
+CHROMIUM_PATH=C:\Program Files\Google\Chrome\Application\chrome.exe
+BROWSER_REUSE=1
+API_TOKEN=change-this-to-a-long-secret
+PROXY_FETCH=1
+```
+
+Save and close. Pick a real `API_TOKEN`. Leave `PROXY_POOL` empty to use the live proxy fetcher.
+
+#### Step 9. Test once in the foreground
+
+```
+npm start
+```
+
+You should see `listening on http://0.0.0.0:3000`. On the same machine:
+
+```
+curl "http://127.0.0.1:3000/api/health"
+```
+
+Or in a browser: `http://127.0.0.1:3000/api/health`. Stop the test with Ctrl+C before installing the service.
+
+#### Step 10. Open Windows Firewall for port 3000
+
+Command Prompt **as Administrator**:
+
+```
+netsh advfirewall firewall add rule name="gsearch-renderer" dir=in action=allow protocol=TCP localport=3000
+```
+
+If the hoster has a **cloud security group / panel firewall** (Contabo, Hetzner, AWS, Azure, Oracle, Hostinger, etc.), also allow inbound TCP **3000** there. Windows firewall alone is not enough on those boxes.
+
+#### Step 11. Install NSSM (run 24/7 as a Windows service)
+
+NSSM keeps `node server.js` running after RDP disconnect and after reboot.
+
+1. Download NSSM: https://nssm.cc/download (win64 zip).
+2. Extract, e.g. to `C:\apps\nssm`.
+3. Command Prompt **as Administrator**:
+
+```
+cd C:\apps\nssm\win64
+nssm install gsearch-renderer
+```
+
+In the NSSM window:
+
+- **Application** tab:
+  - Path: `C:\Program Files\nodejs\node.exe`
+  - Startup directory: `C:\apps\gsearch-renderer`
+  - Arguments: `server.js`
+- **Details** tab:
+  - Display name: `gsearch-renderer`
+  - Startup type: **Automatic**
+- **I/O** tab (optional logs):
+  - Output: `C:\apps\gsearch-renderer\logs\stdout.log`
+  - Error: `C:\apps\gsearch-renderer\logs\stderr.log`
+- **Exit actions** tab:
+  - Restart throttling: `5000` ms
+- Click **Install service**.
+
+Create the log folder first if you set I/O paths:
+
+```
+mkdir C:\apps\gsearch-renderer\logs
+```
+
+Headless (no GUI) install, same result:
+
+```
+nssm install gsearch-renderer "C:\Program Files\nodejs\node.exe" server.js
+nssm set gsearch-renderer AppDirectory C:\apps\gsearch-renderer
+nssm set gsearch-renderer AppStdout C:\apps\gsearch-renderer\logs\stdout.log
+nssm set gsearch-renderer AppStderr C:\apps\gsearch-renderer\logs\stderr.log
+nssm set gsearch-renderer AppRotateFiles 1
+nssm set gsearch-renderer AppRotateBytes 10485760
+nssm set gsearch-renderer Start SERVICE_AUTO_START
+nssm set gsearch-renderer AppRestartDelay 5000
+```
+
+Start it:
+
+```
+nssm start gsearch-renderer
+nssm status gsearch-renderer
+```
+
+Or:
+
+```
+sc start gsearch-renderer
+sc query gsearch-renderer
+```
+
+`STATE` must be `RUNNING`.
+
+#### Step 12. Confirm it survives RDP disconnect
+
+```
+curl "http://127.0.0.1:3000/api/health"
+```
+
+From your home PC (replace IP):
+
+```
+curl "http://YOUR_PUBLIC_IP:3000/api/health"
+curl "http://YOUR_PUBLIC_IP:3000/api/search?q=hello+world&engine=google&token=change-this-to-a-long-secret"
+```
+
+Then **Sign out** of RDP (Start -> Sign out). Do not only click the window X if you still have a console `npm start` running. Wait one minute, curl again from home. Health must still return `ok: true`.
+
+Reboot test:
+
+```
+shutdown /r /t 0
+```
+
+After the server is back, curl health again. The NSSM service is Automatic, so it must come back without login.
+
+#### Step 13. Point gsearch-api at this box
+
+```
+RENDERER_URL=http://YOUR_PUBLIC_IP:3000
+```
+
+If you put HTTPS in front (IIS / Caddy / nginx on Windows), use that `https://` URL instead.
+
+#### Alternative A: Task Scheduler (no NSSM)
+
+1. `Win + R` -> `taskschd.msc`
+2. Create Task (not Create Basic Task).
+3. General:
+   - Name: `gsearch-renderer`
+   - Run whether user is logged on or not
+   - Run with highest privileges
+   - Hidden: checked
+4. Triggers: **At startup**, delay 30 seconds.
+5. Actions: Start a program
+   - Program: `C:\Program Files\nodejs\node.exe`
+   - Arguments: `server.js`
+   - Start in: `C:\apps\gsearch-renderer`
+6. Conditions: uncheck "Start only if on AC power", uncheck "Stop if computer switches to battery".
+7. Settings: check "If the task fails, restart every 1 minute", max 99999 times. Uncheck "Stop the task if it runs longer than".
+8. OK, enter the Windows password.
+9. Right-click the task -> Run.
+
+This also survives RDP disconnect if "Run whether user is logged on or not" is set.
+
+#### Alternative B: PM2
+
+```
+npm install -g pm2
+npm install -g pm2-windows-startup
+cd C:\apps\gsearch-renderer
+pm2 start server.js --name gsearch-renderer
+pm2 save
+pm2-startup install
+```
+
+`pm2-windows-startup` registers a logon/startup task. NSSM is still the more reliable 24/7 option on Windows Server.
+
+#### Update the running service after git pull
+
+```
+cd C:\apps\gsearch-renderer
+git pull
+npm install
+nssm restart gsearch-renderer
+```
+
+#### Useful NSSM commands
+
+```
+nssm status gsearch-renderer
+nssm restart gsearch-renderer
+nssm stop gsearch-renderer
+nssm remove gsearch-renderer confirm
+```
+
+Logs: `C:\apps\gsearch-renderer\logs\stdout.log` and `stderr.log`.
+
+### Horizontal scale (Railway / Render / VPS / Windows RDP)
 
 For 10k+ dorks per run, prefer a long-lived container (`BROWSER_REUSE=1`, default) over serverless.
 
@@ -260,7 +540,7 @@ Set the env var on the gsearch-api project to whatever host you deployed:
 RENDERER_URL=https://gsearch-renderer.vercel.app
 ```
 
-Examples: `https://<service>.up.railway.app`, `https://<service>.onrender.com`, `http://localhost:3000`.
+Examples: `https://<service>.up.railway.app`, `https://<service>.onrender.com`, `http://YOUR_PUBLIC_IP:3000` (Windows RDP), `http://localhost:3000`.
 
 When set, gsearch-api automatically retries any engine that fails its native
 scrape (blocked / rate-limited / empty) through this renderer service.
