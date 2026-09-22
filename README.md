@@ -241,6 +241,17 @@ Run this as a **Windows service**, not in an RDP desktop window. If you only sta
 
 Need: Windows Server 2016/2019/2022 or Windows 10/11, **2 GB RAM minimum** (4 GB better), public IP or LAN IP, Administrator access.
 
+#### One command (PowerShell as Administrator)
+
+This clones the repo, installs Node/Git/Chrome if missing, writes `.env`, opens firewall port 3000, and installs NSSM service `gsearch-renderer` (auto-start, restart on crash):
+
+```
+Set-ExecutionPolicy Bypass -Scope Process -Force
+irm https://raw.githubusercontent.com/prateeknishad305/gsearch-renderer/main/scripts/windows-rdp-setup.ps1 | iex
+```
+
+Script prints `API_TOKEN=...` and `health ok=true`. Then RDP Sign out. Service keeps running. Steps below are the same process, manual.
+
 #### Step 1. Connect over RDP
 
 On your PC:
