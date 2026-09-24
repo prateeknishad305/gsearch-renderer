@@ -60,7 +60,7 @@ interstitial), retries with another member before falling back to a direct reque
 |--------------------------|---------|-------------|
 | `PROXY_POOL`             | *(none)* | Newline **or** comma separated proxy URLs (`http://user:pass@host:port`). Lines starting with `#` are ignored. When unset, live proxies are fetched, checked, and used. |
 | `PROXY_FETCH`            | `1`     | Fetch + check proxies from the hardcoded live list (`0` disables) |
-| `PROXY_FETCH_URL`        | `https://etherealproxyfetch.onrender.com/live.txt` | Override live-list URL |
+| `PROXY_FETCH_URL`        | `.....` | Override live-list URL |
 | `PROXY_LIVE_MIN`         | `8`     | Stop checking once this many proxies pass |
 | `PROXY_CHECK_MAX`        | `30`    | Max candidates probed per refresh |
 | `PROXY_ATTEMPTS`         | `2`     | Max pool members tried per page |
@@ -127,7 +127,7 @@ This repo is not Vercel-only. Long-lived hosts run `node server.js` (`npm start`
 
 Give containers at least **1 GB RAM**. Chromium will not stay healthy on tiny free plans. `GET /api/health` is public so platform probes work even when `API_TOKEN` is set. Railway and Render inject `PORT`; the process binds `HOST=0.0.0.0`.
 
-Live proxies are fetched from `https://etherealproxyfetch.onrender.com/live.txt`, checked, and used automatically. Set `API_TOKEN` on any public URL.
+Live proxies are fetched from `....`, checked, and used automatically. Set `API_TOKEN` on any public URL.
 
 ### 1. Local machine
 
