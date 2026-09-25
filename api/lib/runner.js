@@ -19,7 +19,8 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug }) 
 
   // Google fingerprints fresh sessions harder. Visit the homepage once first so
   // the server issues its own real state (cookies, NID) before the search hits.
-  if (engine === 'google') {
+  // Skip on paginated pages (start>0) to keep multi-page queries faster.
+  if (engine === 'google' && !(cfg && cfg.skipHome)) {
     await page
       .goto(`https://www.google.com/?hl=${encodeURIComponent(hl)}&gl=${encodeURIComponent(gl)}`, {
         waitUntil: 'domcontentloaded',
@@ -27,11 +28,26 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug }) 
       })
       .catch(() => {});
   }
+  if (engine === 'mojeek' && !(cfg && cfg.skipHome)) {
+    await page.goto('https://www.mojeek.com/', { waitUntil: 'domcontentloaded', timeout: 12000 }).catch(() => {});
+  }
 
   let navError = null;
-  await page.goto(cfg.url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS }).catch((err) => {
-    navError = err;
-  });
+  let navStatus = 0;
+  await page
+    .goto(cfg.url, { waitUntil: 'domcontentloaded', timeout: NAV_TIMEOUT_MS })
+    .then((resp) => {
+      navStatus = (resp && resp.status()) || 0;
+    })
+    .catch((err) => {
+      navError = err;
+    });
+
+  if (!navError && (navStatus === 429 || navStatus === 403)) {
+    const e = new Error(`Engine "${engine}" blocked the browser render: HTTP ${navStatus}`);
+    e.code = 'BLOCKED';
+    throw e;
+  }
 
   if (!navError) {
     await page
@@ -39,14 +55,14 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug }) 
         ({ readySel }) => {
           if (document.querySelector(readySel)) return true;
           const t = (document.body ? document.body.innerText : '').replace(/\s+/g, ' ');
-          return /unusual traffic|automated queries|403\s*-\s*forbidden|access denied|prove you are human|verify you are human|went wrong during verification|enablejs|captcha|email us/i.test(
+          return /unusual traffic|automated queries|403\s*-\s*forbidden|access denied|prove you are human|verify you are human|went wrong during verification|enablejs|captcha|email us|drag the slider|not a bot|not yet available in your country|temporarily unavailable|service indisponible|verification required|protected by altcha|waiting for verification/i.test(
             t
           );
         },
         { readySel: cfg.ready, timeout: READY_TIMEOUT_MS }
       )
       .catch(() => {});
-    await page.waitForTimeout(700);
+    await page.waitForTimeout(engine === 'brave' || engine === 'startpage' ? 1400 : 700);
   }
 
   const block = await page.evaluate(detectBlock, engine).catch(() => null);
@@ -136,7 +152,16 @@ async function runQuery(opts) {
       const page = await context.newPage();
       page.setDefaultTimeout(NAV_TIMEOUT_MS);
       page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
-      return await renderOnPage({ engine, cfg: { ...cfg, url }, page, context, num, debug });
+      return await renderOnPage({
+        engine,
+        cfg: { ...cfg, url, skipHome: start > 0 },
+        page,
+        context,
+        num,
+        hl,
+        gl,
+        debug,
+      });
     } finally {
       await context.close().catch(() => {});
     }

@@ -37,6 +37,7 @@ const { startProxyFetcher, stopProxyFetcher } = require('./api/lib/proxyFetch');
 const searchHandler = require('./api/search');
 const batchHandler = require('./api/batch');
 const healthHandler = require('./api/health');
+const crawlHandler = require('./api/crawl');
 
 const PORT = parseInt(process.env.PORT, 10) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -110,6 +111,7 @@ function route(pathname) {
   if (path === '/' || path === '/api/search' || path === '/search') return searchHandler;
   if (path === '/api/batch' || path === '/batch') return batchHandler;
   if (path === '/api/health' || path === '/health') return healthHandler;
+  if (path === '/api/crawl' || path === '/crawl') return crawlHandler;
   return null;
 }
 
@@ -126,6 +128,7 @@ async function handle(req, res) {
       usage: {
         search: 'GET /api/search?q=<query>&engine=<name>',
         batch: 'POST /api/batch',
+        crawl: 'GET /api/crawl?url=<https://example.com>',
         health: 'GET /api/health',
       },
     });

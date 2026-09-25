@@ -11,15 +11,17 @@ test('supports the expected engines', () => {
   }
 });
 
-test('google URL includes query, num, start, hl, gl', () => {
-  const u = ENGINES.google.url({ q: 'hello world', num: 20, start: 10, hl: 'en', gl: 'us' });
+test('google URL paginates by start=10 and does not send num>10', () => {
+  const u = ENGINES.google.url({ q: 'hello world', num: 100, start: 10, hl: 'en', gl: 'us' });
   assert.match(u, /google\.com\/search/);
   const params = new URL(u).searchParams;
   assert.equal(params.get('q'), 'hello world');
-  assert.equal(params.get('num'), '20');
+  assert.equal(params.get('num'), null);
   assert.equal(params.get('start'), '10');
   assert.equal(params.get('hl'), 'en');
   assert.equal(params.get('gl'), 'us');
+  const u0 = ENGINES.google.url({ q: 'x', num: 10, start: 0, hl: 'en', gl: 'us' });
+  assert.equal(new URL(u0).searchParams.get('start'), '0');
 });
 
 test('bing URL uses count and first for pagination', () => {
@@ -31,18 +33,43 @@ test('bing URL uses count and first for pagination', () => {
   assert.equal(new URL(u2).searchParams.get('first'), '21');
 });
 
-test('duckduckgo URL uses kl for locale', () => {
-  const u = ENGINES.duckduckgo.url({ q: 'x', hl: 'en', gl: 'us' });
+test('duckduckgo URL uses kl for locale and s for pagination', () => {
+  const u = ENGINES.duckduckgo.url({ q: 'x', start: 0, hl: 'en', gl: 'us' });
   assert.match(u, /html\.duckduckgo\.com\/html/);
   assert.equal(new URL(u).searchParams.get('kl'), 'us-en');
+  assert.equal(new URL(u).searchParams.get('s'), null);
+  const u2 = ENGINES.duckduckgo.url({ q: 'x', start: 20, hl: 'en', gl: 'us' });
+  assert.equal(new URL(u2).searchParams.get('s'), '20');
 });
 
-test('yahoo URL uses p, n, b', () => {
-  const u = ENGINES.yahoo.url({ q: 'x', num: 20, start: 40 });
+test('yahoo URL uses p, n<=10, b', () => {
+  const u = ENGINES.yahoo.url({ q: 'x', num: 100, start: 10 });
   const p = new URL(u).searchParams;
   assert.equal(p.get('p'), 'x');
-  assert.equal(p.get('n'), '20');
-  assert.equal(p.get('b'), '41');
+  assert.equal(p.get('n'), '10');
+  assert.equal(p.get('b'), '11');
+  const u0 = ENGINES.yahoo.url({ q: 'x', num: 10, start: 0 });
+  assert.equal(new URL(u0).searchParams.get('b'), null);
+});
+
+test('startpage URL paginates with page and omits page on first page', () => {
+  const u0 = ENGINES.startpage.url({ q: 'hello world', num: 10, start: 0 });
+  assert.match(u0, /startpage\.com\/sp\/search/);
+  const p0 = new URL(u0).searchParams;
+  assert.equal(p0.get('query'), 'hello world');
+  assert.equal(p0.get('page'), null);
+  const u2 = ENGINES.startpage.url({ q: 'hello world', num: 10, start: 10 });
+  assert.equal(new URL(u2).searchParams.get('page'), '2');
+});
+
+test('mojeek URL paginates with s and omits s on first page', () => {
+  const u0 = ENGINES.mojeek.url({ q: 'hello world', num: 10, start: 0, hl: 'en', gl: 'us' });
+  assert.match(u0, /mojeek\.com\/search/);
+  const p0 = new URL(u0).searchParams;
+  assert.equal(p0.get('q'), 'hello world');
+  assert.equal(p0.get('s'), null);
+  const u2 = ENGINES.mojeek.url({ q: 'hello world', num: 10, start: 10 });
+  assert.equal(new URL(u2).searchParams.get('s'), '10');
 });
 
 test('brave URL uses country and offset', () => {

@@ -8,8 +8,23 @@ const { getCache } = require('./lib/cache');
 const { send, cors, authOk, unauthorized, maskProxy } = require('./lib/http');
 
 const MAX_NUM = 100;
-const MAX_PAGES = 5;
+const MAX_PAGES = 10;
 const MAX_QUERY_LEN = 512;
+const GOOGLE_PAGE_SIZE = 10;
+const FIXED_PAGE_SIZE = { google: 10, yahoo: 10 };
+
+// Google removed &num=100 (10 organic hits/page). Yahoo also ignores n>10 and
+// serves ~7-10. Paginate those with start=0,10,20,... Other engines keep a
+// higher per-page num.
+function pageStep(engine, num) {
+  if (FIXED_PAGE_SIZE[engine]) return FIXED_PAGE_SIZE[engine];
+  return Math.max(1, num);
+}
+
+function perPageNum(engine, num) {
+  if (FIXED_PAGE_SIZE[engine]) return FIXED_PAGE_SIZE[engine];
+  return Math.min(MAX_NUM, Math.max(1, num));
+}
 
 // Engines that have a plain-HTTP fast path. Turn the whole feature off with
 // env LITE_FAST=0, or skip per-engine with LITE_FAST_<ENGINE>=0.
@@ -40,40 +55,51 @@ function buildTries(explicitProxy) {
 }
 
 // Runs one engine, optionally across multiple result pages, merging unique URLs.
-// Returns { results, duration_ms, attempts, proxy, source }.
-async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en', gl = 'us', proxy, debug }) {
+// autoPages=true keeps fetching until `num` unique URLs (or MAX_PAGES).
+async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en', gl = 'us', proxy, debug, autoPages = false }) {
+  const pageCount = Math.min(Math.max(1, pages), MAX_PAGES);
+  const step = pageStep(engine, num);
+  const perPage = perPageNum(engine, num);
+  const cap = Math.min(MAX_NUM, autoPages ? Math.max(num, 1) : num * pageCount);
+
   if (!debug && liteEnabled(engine)) {
     try {
-      const lite = await fastLiteSearch({ engine, query, num: num * pages, hl, gl });
+      const lite = await fastLiteSearch({ engine, query, num: cap, hl, gl });
       if (lite.results && lite.results.length) {
-        return { results: lite.results.slice(0, num * pages), duration_ms: lite.duration_ms, attempts: 1, proxy: null, source: 'lite' };
+        return {
+          results: lite.results.slice(0, cap),
+          duration_ms: lite.duration_ms,
+          attempts: 1,
+          proxy: null,
+          source: 'lite',
+          pages_fetched: 1,
+          pages_requested: pageCount,
+        };
       }
     } catch {
       /* fall through to Chromium */
     }
   }
 
-  const pageCount = Math.min(Math.max(1, pages), MAX_PAGES);
-  const offsets = [];
-  for (let i = 0; i < pageCount; i++) offsets.push(start + i * num);
-
   const deadline = Date.now() + intEnv('PROXY_WINDOW_MS', 28000) * pageCount;
   const merged = [];
   const seen = new Set();
   let attempts = 0;
+  let pagesFetched = 0;
   let proxyUsed = null;
   let duration = 0;
   let lastErr = new Error('no search attempt could be made');
 
-  for (const offset of offsets) {
+  for (let i = 0; i < pageCount; i++) {
     if (Date.now() > deadline) break;
+    const offset = start + i * step;
     let pageResults = null;
 
     for (const candidate of buildTries(proxy)) {
       if (Date.now() > deadline) break;
       attempts += 1;
       try {
-        const r = await runQuery({ engine, query, num, start: offset, hl, gl, proxy: candidate, debug });
+        const r = await runQuery({ engine, query, num: perPage, start: offset, hl, gl, proxy: candidate, debug });
         pageResults = r.results;
         duration += r.duration_ms;
         proxyUsed = candidate;
@@ -86,18 +112,28 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
 
     if (!pageResults) {
       if (merged.length === 0) throw lastErr;
-      break; // got something from earlier pages; don't fail the whole request
+      break;
     }
+    pagesFetched += 1;
     for (const item of pageResults) {
       if (item && item.url && !seen.has(item.url)) {
         seen.add(item.url);
         merged.push(item);
       }
     }
+    if (pageResults.length === 0) break;
   }
 
   if (merged.length === 0) throw lastErr;
-  return { results: merged.slice(0, num * pageCount), duration_ms: duration, attempts, proxy: proxyUsed, source: 'render' };
+  return {
+    results: merged.slice(0, autoPages ? Math.min(MAX_NUM, merged.length) : cap),
+    duration_ms: duration,
+    attempts,
+    proxy: proxyUsed,
+    source: 'render',
+    pages_fetched: pagesFetched,
+    pages_requested: pageCount,
+  };
 }
 
 // Backwards-compatible single-engine entry point used by the gsearch-api
@@ -128,7 +164,7 @@ module.exports = async (req, res) => {
       service: 'gsearch-renderer',
       ok: true,
       usage:
-        'GET /api/search?q=<query>&engine=<name>  OR  engines=<name,name,...>&num=&start=&pages=&hl=&gl=&proxy=&nocache=&token=',
+        'GET /api/search?q=<query>&engine=<name>  OR  engines=<name,name,...>&num=&start=&pages=&hl=&gl=&proxy=&nocache=&token=. Response includes duration_ms (render) and response_time_ms (wall clock). Omit pages to auto-fetch extra SERP pages.',
       engines: names(),
       pool: poolInfo(),
       note:
@@ -149,25 +185,32 @@ module.exports = async (req, res) => {
   }
 
   const num = Math.min(Math.max(1, Number(req.query.num) || 20), MAX_NUM);
-  const pages = Math.min(Math.max(1, Number(req.query.pages) || 1), MAX_PAGES);
+  const pagesGiven = req.query.pages !== undefined && req.query.pages !== '';
+  const autoPages = !pagesGiven;
+  const pages = pagesGiven
+    ? Math.min(Math.max(1, Number(req.query.pages) || 1), MAX_PAGES)
+    : Math.min(MAX_PAGES, Math.max(2, Math.ceil(num / 10) + 1));
   const start = Math.max(0, Number(req.query.start) || 0);
   const hl = String(req.query.hl || 'en').slice(0, 8);
   const gl = String(req.query.gl || 'us').slice(0, 8);
   const proxy = String(req.query.proxy || '').trim();
   const debug = req.query.debug === '1';
   const useCache = req.query.nocache !== '1' && !debug && !proxy;
+  const t0 = Date.now();
 
   const cache = getCache();
-  const cacheKey = JSON.stringify(['v2', engineList.join(','), q, num, pages, start, hl, gl]);
+  const cacheKey = JSON.stringify(['v3', engineList.join(','), q, num, pagesGiven ? pages : 'auto', start, hl, gl]);
   if (useCache) {
     const hit = cache.get(cacheKey);
-    if (hit) return send(res, { ...hit, cached: true });
+    if (hit) {
+      return send(res, { ...hit, cached: true, response_time_ms: Date.now() - t0 });
+    }
   }
 
   let lastErr = new Error('no engine produced a result');
   for (const engine of engineList) {
     try {
-      const r = await searchEngine({ engine, query: q, num, pages, start, hl, gl, proxy, debug });
+      const r = await searchEngine({ engine, query: q, num, pages, start, hl, gl, proxy, debug, autoPages });
       const body = {
         engine,
         engines_tried: engineList.slice(0, engineList.indexOf(engine) + 1),
@@ -176,7 +219,10 @@ module.exports = async (req, res) => {
         count: r.results.length,
         results: r.results,
         duration_ms: r.duration_ms,
+        response_time_ms: Date.now() - t0,
         attempts: r.attempts,
+        pages_fetched: r.pages_fetched,
+        pages_requested: r.pages_requested,
         source: r.source,
         proxy: maskProxy(r.proxy),
       };
@@ -184,7 +230,7 @@ module.exports = async (req, res) => {
       return send(res, body);
     } catch (err) {
       if (err && err.code === 'UNKNOWN_ENGINE') {
-        return send(res, { error: err.message, http_status: 400 });
+        return send(res, { error: err.message, http_status: 400, response_time_ms: Date.now() - t0 });
       }
       lastErr = err;
     }
@@ -199,9 +245,15 @@ module.exports = async (req, res) => {
     error: lastErr.message,
     count: 0,
     results: [],
+    duration_ms: Date.now() - t0,
+    response_time_ms: Date.now() - t0,
   });
 };
 
 module.exports.config = { maxDuration: 60, memory: 1024 };
 module.exports.renderSearch = renderSearch;
 module.exports.searchEngine = searchEngine;
+module.exports.pageStep = pageStep;
+module.exports.perPageNum = perPageNum;
+module.exports.GOOGLE_PAGE_SIZE = GOOGLE_PAGE_SIZE;
+module.exports.MAX_PAGES = MAX_PAGES;

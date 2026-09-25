@@ -60,7 +60,11 @@ module.exports = async (req, res) => {
   }
 
   const num = Math.min(Math.max(1, Number(body.num) || 20), 100);
-  const pages = Math.min(Math.max(1, Number(body.pages) || 1), 5);
+  const pagesGiven = body.pages !== undefined && body.pages !== '';
+  const autoPages = !pagesGiven;
+  const pages = pagesGiven
+    ? Math.min(Math.max(1, Number(body.pages) || 1), 10)
+    : Math.min(10, Math.max(2, Math.ceil(num / 10) + 1));
   const hl = String(body.hl || 'en').slice(0, 8);
   const gl = String(body.gl || 'us').slice(0, 8);
   const useCache = body.nocache !== true;
@@ -75,7 +79,7 @@ module.exports = async (req, res) => {
       continue;
     }
 
-    const cacheKey = JSON.stringify(['v2', engineList.join(','), query, num, pages, 0, hl, gl]);
+    const cacheKey = JSON.stringify(['v3', engineList.join(','), query, num, pagesGiven ? pages : 'auto', 0, hl, gl]);
     if (useCache) {
       const hit = cache.get(cacheKey);
       if (hit) {
@@ -88,7 +92,7 @@ module.exports = async (req, res) => {
     let lastErr = new Error('no engine produced a result');
     for (const engine of engineList) {
       try {
-        const r = await searchEngine({ engine, query, num, pages, start: 0, hl, gl });
+        const r = await searchEngine({ engine, query, num, pages, start: 0, hl, gl, autoPages });
         settled = r;
         const item = {
           query,
@@ -97,7 +101,10 @@ module.exports = async (req, res) => {
           count: r.results.length,
           results: r.results,
           duration_ms: r.duration_ms,
+          response_time_ms: r.duration_ms,
           attempts: r.attempts,
+          pages_fetched: r.pages_fetched,
+          pages_requested: r.pages_requested,
           source: r.source,
         };
         out.push(item);
@@ -110,15 +117,26 @@ module.exports = async (req, res) => {
       }
     }
     if (!settled) {
-      out.push({ query, success: false, code: lastErr.code || 'ERROR', error: lastErr.message, count: 0, results: [] });
+      out.push({
+        query,
+        success: false,
+        code: lastErr.code || 'ERROR',
+        error: lastErr.message,
+        count: 0,
+        results: [],
+        duration_ms: 0,
+        response_time_ms: 0,
+      });
     }
   }
 
+  const durationMs = Date.now() - started;
   return send(res, {
     success: true,
     batch_size: queries.length,
     completed: out.filter((o) => o.success).length,
-    duration_ms: Date.now() - started,
+    duration_ms: durationMs,
+    response_time_ms: durationMs,
     pool: poolInfo(),
     results: out,
   });

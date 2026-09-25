@@ -14,10 +14,16 @@ const UA =
   '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 const ENDPOINTS = {
-  duckduckgo: ({ q, kl }) =>
-    `https://html.duckduckgo.com/html/?${new URLSearchParams({ q, kl }).toString()}`,
-  duckduckgo_lite: ({ q }) =>
-    `https://lite.duckduckgo.com/lite/?${new URLSearchParams({ q }).toString()}`,
+  duckduckgo: ({ q, kl, s }) => {
+    const p = new URLSearchParams({ q, kl });
+    if (s) p.set('s', String(s));
+    return `https://html.duckduckgo.com/html/?${p.toString()}`;
+  },
+  duckduckgo_lite: ({ q, s }) => {
+    const p = new URLSearchParams({ q });
+    if (s) p.set('s', String(s));
+    return `https://lite.duckduckgo.com/lite/?${p.toString()}`;
+  },
 };
 
 function stripTags(s) {
@@ -92,17 +98,7 @@ function isBlockedPage(html, engine) {
   return false;
 }
 
-async function fastLiteSearch({ engine, query, num = 20, hl = 'en', gl = 'us' }) {
-  const build = ENDPOINTS[engine];
-  if (!build) {
-    const e = new Error(`No lite endpoint for engine "${engine}"`);
-    e.code = 'NO_LITE_ENDPOINT';
-    throw e;
-  }
-  const kl = `${gl || 'us'}-${hl || 'en'}`;
-  const url = build({ q: query, kl });
-  const t0 = Date.now();
-
+async function fetchLitePage(url, engine) {
   let resp;
   try {
     resp = await fetch(url, {
@@ -119,7 +115,6 @@ async function fastLiteSearch({ engine, query, num = 20, hl = 'en', gl = 'us' })
     e.code = 'LITE_FETCH_ERROR';
     throw e;
   }
-
   const html = await resp.text();
   if (resp.status === 202 || resp.status === 403 || resp.status === 429 || isBlockedPage(html, engine)) {
     const e = new Error(`Engine "${engine}" blocked plain-HTTP fetch (status ${resp.status})`);
@@ -131,17 +126,46 @@ async function fastLiteSearch({ engine, query, num = 20, hl = 'en', gl = 'us' })
     e.code = 'LITE_HTTP_ERROR';
     throw e;
   }
+  return html;
+}
 
+async function fastLiteSearch({ engine, query, num = 20, hl = 'en', gl = 'us' }) {
+  const build = ENDPOINTS[engine];
+  if (!build) {
+    const e = new Error(`No lite endpoint for engine "${engine}"`);
+    e.code = 'NO_LITE_ENDPOINT';
+    throw e;
+  }
+  const kl = `${gl || 'us'}-${hl || 'en'}`;
   const parser = PARSERS[engine];
+  const t0 = Date.now();
+  const pageCount = Math.min(5, Math.max(1, Math.ceil(num / 10)));
   const results = [];
   const seen = new Set();
-  for (const r of parser(html)) {
-    if (seen.has(r.url)) continue;
-    seen.add(r.url);
-    results.push(r);
+  let lastErr = null;
+
+  for (let i = 0; i < pageCount; i++) {
+    if (results.length >= num) break;
+    const url = build({ q: query, kl, s: i * 10 || undefined });
+    try {
+      const html = await fetchLitePage(url, engine);
+      let added = 0;
+      for (const r of parser(html)) {
+        if (seen.has(r.url)) continue;
+        seen.add(r.url);
+        results.push(r);
+        added += 1;
+      }
+      if (added === 0) break;
+    } catch (err) {
+      lastErr = err;
+      if (results.length === 0) throw err;
+      break;
+    }
   }
 
   if (results.length === 0) {
+    if (lastErr) throw lastErr;
     const e = new Error(`Engine "${engine}" returned no organic results on plain-HTTP page`);
     e.code = 'EMPTY_RESULTS';
     throw e;

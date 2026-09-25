@@ -62,6 +62,18 @@ test('maskProxy hides embedded credentials', () => {
   assert.strictEqual(maskProxy(null), null);
 });
 
+test('pageStep uses 10 for google and num for other engines', () => {
+  const { pageStep, perPageNum, GOOGLE_PAGE_SIZE } = require('../api/search');
+  assert.strictEqual(GOOGLE_PAGE_SIZE, 10);
+  assert.strictEqual(pageStep('google', 20), 10);
+  assert.strictEqual(pageStep('google', 50), 10);
+  assert.strictEqual(pageStep('bing', 20), 20);
+  assert.strictEqual(pageStep('yahoo', 30), 10);
+  assert.strictEqual(perPageNum('google', 100), 10);
+  assert.strictEqual(perPageNum('yahoo', 50), 10);
+  assert.strictEqual(perPageNum('bing', 50), 50);
+});
+
 test('authOk is open when API_TOKEN unset and enforced when set', () => {
   const prev = process.env.API_TOKEN;
   delete process.env.API_TOKEN;

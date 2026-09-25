@@ -4,6 +4,7 @@
     { "source": "/", "destination": "/api/search" },
     { "source": "/search", "destination": "/api/search" },
     { "source": "/batch", "destination": "/api/batch" },
+    { "source": "/crawl", "destination": "/api/crawl" },
     { "source": "/health", "destination": "/api/health" }
   ]
 }

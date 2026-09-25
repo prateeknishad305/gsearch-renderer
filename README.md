@@ -2,7 +2,7 @@
 
 Headless Chromium SERP renderer for [gsearch-api](https://github.com/prateeknishad305/gsearch-api).
 
-Host this anywhere: **Vercel, Railway, Render, Docker, a VPS, a Windows RDP server (24/7), or your laptop**. Same HTTP API on every platform (`GET /api/search`, `POST /api/batch`, `GET /api/health`).
+Host this anywhere: **Vercel, Railway, Render, Docker, a VPS, a Windows RDP server (24/7), or your laptop**. Same HTTP API on every platform (`GET /api/search`, `POST /api/batch`, `GET /api/crawl`, `GET /api/health`).
 
 Chromium is auto-detected: `@sparticuz/chromium` on Vercel serverless, system Chrome/Chromium on Railway / Render / Docker / local.
 
@@ -19,8 +19,8 @@ gsearch-api scrapes search engines with plain HTTP. Some engines (Google, DuckDu
 | `q`       | required | Search query |
 | `engine`  | `google` | Single engine (back-compat) |
 | `engines` | *(none)* | Comma list tried in order; first engine that returns results wins (e.g. `google,bing`). Takes precedence over `engine`. |
-| `num`     | `20`     | Target results per page (max `100`) |
-| `pages`   | `1`      | Fetch and merge up to `5` result pages per query (more URLs per dork) |
+| `num`     | `20`     | Target unique results (max `100`). Google and Yahoo cap desktop SERPs at **~10 results per page** (`&num=100` is gone / ignored), so extra pages (`start=0,10,20,...`) are fetched automatically. Bing and others still take a higher per-page count. |
+| `pages`   | auto     | SERP pages to merge (max `10`). Omit to auto-fetch extra pages (`ceil(num/10)+1`, min `2`). |
 | `start`   | `0`      | Pagination offset |
 | `hl`      | `en`     | Interface language |
 | `gl`      | `us`     | Country |
@@ -37,13 +37,34 @@ Run several dorks in **one** HTTP call on the shared pooled browser. This amorti
 container warm-up and avoids the per-request concurrency limits of serverless.
 
 ```json
-{ "queries": ["inurl:index.php?id=", "inurl:product.php?cat="], "engines": "google,bing", "num": 20, "pages": 1 }
+{ "queries": ["inurl:index.php?id=", "inurl:product.php?cat="], "engines": "google,bing", "num": 20 }
 ```
 
 Response: `{ success, batch_size, completed, duration_ms, pool, results: [{ query, success, engine, count, results }] }`.
 `BATCH_MAX` (default `6`) caps queries per call; `BATCH_BUDGET_MS` (default `50000`)
 stops early so the function returns before the timeout (remaining queries get
 `code: "TIME_BUDGET"`).
+
+### `GET /api/crawl` (also `POST`)
+
+Bounded same-origin BFS crawler. Renders pages in Chromium, extracts title /
+description / text / links. Private and local hosts are blocked. Caps: 20 pages,
+depth 3, wall-clock `CRAWL_BUDGET_MS` (default `50000`).
+
+| Param         | Default | Description |
+|---------------|---------|-------------|
+| `url`         | required | Start URL (`http`/`https` only) |
+| `max_pages`   | `8`     | Pages to visit (max `20`) |
+| `max_depth`   | `1`     | Link follow depth (max `3`) |
+| `same_origin` | `1`     | Stay on the start hostname |
+| `proxy`       | `""`    | Optional browser proxy |
+| `token`       | *(none)*| API token when `API_TOKEN` is set |
+
+```
+curl "http://localhost:3000/api/crawl?url=https://example.com&max_pages=3&max_depth=1"
+```
+
+POST JSON is also accepted: `{ "url": "https://example.com", "max_pages": 3, "max_depth": 1 }`.
 
 ### `GET /api/health`
 
@@ -79,6 +100,7 @@ interstitial), retries with another member before falling back to a direct reque
 | `LITE_FAST`         | `1`     | Plain-HTTP fast path for DuckDuckGo engines (`0` disables) |
 | `BATCH_MAX`         | `6`     | Max queries per `POST /api/batch` |
 | `BATCH_BUDGET_MS`   | `50000` | Batch wall-clock budget |
+| `CRAWL_BUDGET_MS`   | `50000` | Crawl wall-clock budget |
 | `API_TOKEN`         | *(none)*| When set, require `Authorization: Bearer <token>` or `?token=` |
 
 Note: proxied requests force Chromium to HTTP/1.1 (`--disable-http2`). Several HTTP
@@ -94,7 +116,10 @@ Success:
   "success": true,
   "count": 20,
   "results": [{ "url": "https://en.wikipedia.org/wiki/Hello,_world", "title": "Hello, world", "snippet": "..." }],
-  "duration_ms": 4210
+  "duration_ms": 4210,
+  "response_time_ms": 4580,
+  "pages_fetched": 2,
+  "pages_requested": 2
 }
 ```
 
@@ -108,7 +133,9 @@ Failure (upstream block / no results — always HTTP 200, never a 502):
   "code": "BLOCKED",
   "error": "Engine \"google\" blocked the browser render: Google is showing its \"unusual traffic\" interstitial for this IP.",
   "count": 0,
-  "results": []
+  "results": [],
+  "duration_ms": 8120,
+  "response_time_ms": 8340
 }
 ```
 

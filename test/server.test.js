@@ -6,8 +6,9 @@ const { route, parseQuery, wrapRes } = require('../server');
 const searchHandler = require('../api/search');
 const batchHandler = require('../api/batch');
 const healthHandler = require('../api/health');
+const crawlHandler = require('../api/crawl');
 
-test('route maps search, batch, health and aliases', () => {
+test('route maps search, batch, health, crawl and aliases', () => {
   assert.equal(route('/api/search'), searchHandler);
   assert.equal(route('/search'), searchHandler);
   assert.equal(route('/'), searchHandler);
@@ -15,6 +16,8 @@ test('route maps search, batch, health and aliases', () => {
   assert.equal(route('/batch'), batchHandler);
   assert.equal(route('/api/health'), healthHandler);
   assert.equal(route('/health'), healthHandler);
+  assert.equal(route('/api/crawl'), crawlHandler);
+  assert.equal(route('/crawl'), crawlHandler);
   assert.equal(route('/nope'), null);
 });
 
