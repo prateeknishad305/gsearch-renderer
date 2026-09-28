@@ -34,6 +34,7 @@ module.exports = async (req, res) => {
       pagination: true,
       batch: true,
       proxy_fetch: String(process.env.PROXY_FETCH || '1') !== '0',
+      user_proxies: true,
       crawl: true,
     },
   });

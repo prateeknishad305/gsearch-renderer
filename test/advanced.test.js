@@ -12,11 +12,13 @@ test('splitPool parses newline/comma lists and drops comments', () => {
   assert.deepStrictEqual(pool, ['http://a:1', 'http://b:2', 'http://c:3']);
 });
 
-test('poolInfo reports fetcher metadata', () => {
+test('poolInfo reports proxies_available and hides fetcher URL', () => {
   const { poolInfo } = require('../api/lib/proxyPool');
   const info = poolInfo();
   assert.ok(info.fetcher);
-  assert.equal(info.fetcher.url, 'https://etherealproxyfetch.onrender.com/live.txt');
+  assert.equal(info.fetcher.url, undefined);
+  assert.equal(typeof info.proxies_available, 'number');
+  assert.equal(info.proxies_available, info.shard_size);
 });
 
 test('splitPool accepts host:port:user:pass live-list format', () => {
@@ -63,7 +65,7 @@ test('maskProxy hides embedded credentials', () => {
 });
 
 test('pageStep uses 10 for google and num for other engines', () => {
-  const { pageStep, perPageNum, GOOGLE_PAGE_SIZE } = require('../api/search');
+  const { pageStep, perPageNum, autoPageCount, GOOGLE_PAGE_SIZE } = require('../api/search');
   assert.strictEqual(GOOGLE_PAGE_SIZE, 10);
   assert.strictEqual(pageStep('google', 20), 10);
   assert.strictEqual(pageStep('google', 50), 10);
@@ -72,6 +74,10 @@ test('pageStep uses 10 for google and num for other engines', () => {
   assert.strictEqual(perPageNum('google', 100), 10);
   assert.strictEqual(perPageNum('yahoo', 50), 10);
   assert.strictEqual(perPageNum('bing', 50), 50);
+  assert.strictEqual(autoPageCount('google', 20), 2);
+  assert.strictEqual(autoPageCount('google', 10), 1);
+  assert.strictEqual(autoPageCount('bing', 50), 1);
+  assert.strictEqual(autoPageCount('yahoo', 25), 3);
 });
 
 test('authOk is open when API_TOKEN unset and enforced when set', () => {

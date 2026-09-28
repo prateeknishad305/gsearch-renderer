@@ -54,7 +54,33 @@ function filePool() {
   return [];
 }
 
+const MAX_USER_PROXIES = Math.min(100, Math.max(1, parseInt(process.env.USER_PROXY_MAX || '50', 10) || 50));
+let userPool = [];
+
+function getUserProxies() {
+  return userPool.slice();
+}
+
+function setUserProxies(raw) {
+  const list = Array.isArray(raw) ? splitPool(raw.join('\n')) : splitPool(raw);
+  const uniq = [];
+  const seen = new Set();
+  for (const p of list) {
+    if (seen.has(p)) continue;
+    seen.add(p);
+    uniq.push(p);
+    if (uniq.length >= MAX_USER_PROXIES) break;
+  }
+  userPool = uniq;
+  return userPool.slice();
+}
+
+function clearUserProxies() {
+  userPool = [];
+}
+
 function getProxyPool() {
+  if (userPool.length) return userPool.slice();
   const envPool = String(process.env.PROXY_POOL || '').trim();
   if (envPool) return splitPool(envPool);
   try {
@@ -81,28 +107,47 @@ function getShardPool() {
 
 function poolInfo() {
   const pool = getProxyPool();
+  const shard = getShardPool();
   const total = intEnv('PROXY_SHARD_TOTAL', 1);
   const index = Math.max(0, parseInt(process.env.PROXY_SHARD_INDEX || '0', 10) || 0);
   let fetcher = null;
   try {
-    fetcher = require('./proxyFetch').fetcherInfo();
+    const raw = require('./proxyFetch').fetcherInfo();
+    fetcher = {
+      enabled: !!raw.enabled,
+      alive: raw.alive || 0,
+      last_ok_ms: raw.last_ok_ms || 0,
+      error: raw.error || null,
+    };
   } catch {
     /* ignore */
   }
+  let source = 'none';
+  if (userPool.length) source = 'user';
+  else if (String(process.env.PROXY_POOL || '').trim()) source = 'env';
+  else if (fetcher && fetcher.alive) source = 'live';
+  else if (filePool().length) source = 'file';
   return {
     pool_size: pool.length,
     shard_total: total,
     shard_index: index,
-    shard_size: getShardPool().length,
-    source: String(process.env.PROXY_POOL || '').trim()
-      ? 'env'
-      : fetcher && fetcher.alive
-        ? 'fetcher'
-        : filePool().length
-          ? 'file'
-          : 'none',
+    shard_size: shard.length,
+    proxies_available: shard.length,
+    source,
     fetcher,
   };
 }
 
-module.exports = { splitPool, shardPool, getProxyPool, getShardPool, poolInfo, intEnv, normalizeProxy };
+module.exports = {
+  splitPool,
+  shardPool,
+  getProxyPool,
+  getShardPool,
+  poolInfo,
+  intEnv,
+  normalizeProxy,
+  getUserProxies,
+  setUserProxies,
+  clearUserProxies,
+  MAX_USER_PROXIES,
+};

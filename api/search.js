@@ -3,7 +3,7 @@
 const { ENGINES, names } = require('./lib/engines');
 const { fastLiteSearch } = require('./lib/lite');
 const { runQuery } = require('./lib/runner');
-const { getShardPool, poolInfo, intEnv } = require('./lib/proxyPool');
+const { getShardPool, getUserProxies, poolInfo, intEnv } = require('./lib/proxyPool');
 const { getCache } = require('./lib/cache');
 const { send, cors, authOk, unauthorized, maskProxy } = require('./lib/http');
 
@@ -24,6 +24,12 @@ function pageStep(engine, num) {
 function perPageNum(engine, num) {
   if (FIXED_PAGE_SIZE[engine]) return FIXED_PAGE_SIZE[engine];
   return Math.min(MAX_NUM, Math.max(1, num));
+}
+
+function autoPageCount(engine, num) {
+  if (!FIXED_PAGE_SIZE[engine]) return 1;
+  const step = FIXED_PAGE_SIZE[engine];
+  return Math.min(MAX_PAGES, Math.max(1, Math.ceil(Math.max(1, num) / step)));
 }
 
 // Engines that have a plain-HTTP fast path. Turn the whole feature off with
@@ -48,9 +54,12 @@ function buildTries(explicitProxy) {
     /* ignore */
   }
   const pool = getShardPool().sort(() => Math.random() - 0.5);
-  const picks = Math.min(pool.length, intEnv('PROXY_ATTEMPTS', 2));
+  const user = getUserProxies().length > 0;
+  const picks = Math.min(pool.length, intEnv('PROXY_ATTEMPTS', user ? 1 : 2));
   const tries = pool.slice(0, picks);
-  if (String(process.env.PROXY_FALLBACK_DIRECT) !== '0' || tries.length === 0) tries.push(null);
+  const fallbackDefault = user ? '0' : '1';
+  const fallbackDirect = String(process.env.PROXY_FALLBACK_DIRECT || fallbackDefault) !== '0';
+  if (fallbackDirect || tries.length === 0) tries.push(null);
   return tries;
 }
 
@@ -122,6 +131,7 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
       }
     }
     if (pageResults.length === 0) break;
+    if (autoPages && merged.length >= num) break;
   }
 
   if (merged.length === 0) throw lastErr;
@@ -189,7 +199,7 @@ module.exports = async (req, res) => {
   const autoPages = !pagesGiven;
   const pages = pagesGiven
     ? Math.min(Math.max(1, Number(req.query.pages) || 1), MAX_PAGES)
-    : Math.min(MAX_PAGES, Math.max(2, Math.ceil(num / 10) + 1));
+    : Math.max(...engineList.map((e) => autoPageCount(e, num)));
   const start = Math.max(0, Number(req.query.start) || 0);
   const hl = String(req.query.hl || 'en').slice(0, 8);
   const gl = String(req.query.gl || 'us').slice(0, 8);
@@ -255,5 +265,6 @@ module.exports.renderSearch = renderSearch;
 module.exports.searchEngine = searchEngine;
 module.exports.pageStep = pageStep;
 module.exports.perPageNum = perPageNum;
+module.exports.autoPageCount = autoPageCount;
 module.exports.GOOGLE_PAGE_SIZE = GOOGLE_PAGE_SIZE;
 module.exports.MAX_PAGES = MAX_PAGES;

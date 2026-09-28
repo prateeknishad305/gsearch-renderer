@@ -3,15 +3,17 @@
 const { test, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { PROXY_FETCH_URL, getLivePool, setLivePoolForTests, fetcherInfo } = require('../api/lib/proxyFetch');
-const { getProxyPool, splitPool } = require('../api/lib/proxyPool');
+const { getProxyPool, splitPool, setUserProxies, clearUserProxies } = require('../api/lib/proxyPool');
 
 after(() => {
   setLivePoolForTests([]);
+  clearUserProxies();
 });
 
-test('hardcoded proxy fetcher URL is etherealproxyfetch live.txt', () => {
+test('hardcoded proxy fetcher URL is internal only', () => {
   assert.equal(PROXY_FETCH_URL, 'https://etherealproxyfetch.onrender.com/live.txt');
-  assert.equal(fetcherInfo().url, PROXY_FETCH_URL);
+  assert.equal(fetcherInfo().url, undefined);
+  assert.equal(typeof fetcherInfo().alive, 'number');
 });
 
 test('getProxyPool uses checked live list when PROXY_POOL is unset', () => {
@@ -31,6 +33,19 @@ test('PROXY_POOL env still wins over live list', () => {
   process.env.PROXY_POOL = 'http://env:1\nhttp://env:2';
   setLivePoolForTests(['http://live:9']);
   assert.deepEqual(getProxyPool(), ['http://env:1', 'http://env:2']);
+  if (prev === undefined) delete process.env.PROXY_POOL;
+  else process.env.PROXY_POOL = prev;
+  setLivePoolForTests([]);
+});
+
+test('user proxies take precedence over live list and env', () => {
+  const prev = process.env.PROXY_POOL;
+  process.env.PROXY_POOL = 'http://env:1';
+  setLivePoolForTests(['http://live:9']);
+  setUserProxies(['http://user:pass@9.9.9.9:8080']);
+  assert.deepEqual(getProxyPool(), ['http://user:pass@9.9.9.9:8080']);
+  clearUserProxies();
+  assert.deepEqual(getProxyPool(), ['http://env:1']);
   if (prev === undefined) delete process.env.PROXY_POOL;
   else process.env.PROXY_POOL = prev;
   setLivePoolForTests([]);

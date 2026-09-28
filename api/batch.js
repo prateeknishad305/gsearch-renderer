@@ -1,7 +1,7 @@
 'use strict';
 
 const { ENGINES, names } = require('./lib/engines');
-const { searchEngine } = require('./search');
+const { searchEngine, autoPageCount } = require('./search');
 const { poolInfo } = require('./lib/proxyPool');
 const { getCache } = require('./lib/cache');
 const { send, cors, authOk, unauthorized } = require('./lib/http');
@@ -64,7 +64,7 @@ module.exports = async (req, res) => {
   const autoPages = !pagesGiven;
   const pages = pagesGiven
     ? Math.min(Math.max(1, Number(body.pages) || 1), 10)
-    : Math.min(10, Math.max(2, Math.ceil(num / 10) + 1));
+    : Math.max(...engineList.map((e) => autoPageCount(e, num)));
   const hl = String(body.hl || 'en').slice(0, 8);
   const gl = String(body.gl || 'us').slice(0, 8);
   const useCache = body.nocache !== true;

@@ -17,19 +17,18 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug }) 
     await context.addCookies(cfg.cookies({ hl, gl })).catch(() => {});
   }
 
-  // Google fingerprints fresh sessions harder. Visit the homepage once first so
-  // the server issues its own real state (cookies, NID) before the search hits.
-  // Skip on paginated pages (start>0) to keep multi-page queries faster.
-  if (engine === 'google' && !(cfg && cfg.skipHome)) {
+  // Optional homepage warmup (GOOGLE_HOME_WARMUP=1 / MOJEEK_HOME_WARMUP=1).
+  // Off by default — a second navigation adds ~8-12s per query.
+  if (engine === 'google' && String(process.env.GOOGLE_HOME_WARMUP || '0') === '1' && !(cfg && cfg.skipHome)) {
     await page
       .goto(`https://www.google.com/?hl=${encodeURIComponent(hl)}&gl=${encodeURIComponent(gl)}`, {
         waitUntil: 'domcontentloaded',
-        timeout: 12000,
+        timeout: 8000,
       })
       .catch(() => {});
   }
-  if (engine === 'mojeek' && !(cfg && cfg.skipHome)) {
-    await page.goto('https://www.mojeek.com/', { waitUntil: 'domcontentloaded', timeout: 12000 }).catch(() => {});
+  if (engine === 'mojeek' && String(process.env.MOJEEK_HOME_WARMUP || '0') === '1' && !(cfg && cfg.skipHome)) {
+    await page.goto('https://www.mojeek.com/', { waitUntil: 'domcontentloaded', timeout: 8000 }).catch(() => {});
   }
 
   let navError = null;
@@ -62,7 +61,7 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug }) 
         { readySel: cfg.ready, timeout: READY_TIMEOUT_MS }
       )
       .catch(() => {});
-    await page.waitForTimeout(engine === 'brave' || engine === 'startpage' ? 1400 : 700);
+    await page.waitForTimeout(engine === 'brave' || engine === 'startpage' ? 900 : 200);
   }
 
   const block = await page.evaluate(detectBlock, engine).catch(() => null);

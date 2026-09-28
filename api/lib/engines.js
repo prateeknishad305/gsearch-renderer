@@ -622,7 +622,7 @@ async function resolveGoogleRedirects(context, results, limit = 20) {
       try {
         const resp = await context.request.get(`https://www.google.com${href}`, {
           maxRedirects: 5,
-          timeout: 10000,
+          timeout: 4000,
         });
         const finalUrl = resp.url();
         if (/^https?:\/\//i.test(finalUrl)) resolved.set(href, finalUrl);

@@ -2,7 +2,7 @@
 
 Headless Chromium SERP renderer for [gsearch-api](https://github.com/prateeknishad305/gsearch-api).
 
-Host this anywhere: **Vercel, Railway, Render, Docker, a VPS, a Windows RDP server (24/7), or your laptop**. Same HTTP API on every platform (`GET /api/search`, `POST /api/batch`, `GET /api/crawl`, `GET /api/health`).
+Host this anywhere: **Vercel, Railway, Render, Docker, a VPS (tmux or systemd), a Windows RDP server (24/7), or your laptop**. Same HTTP API on every platform (`GET /api/search`, `POST /api/batch`, `GET /api/crawl`, `GET|POST|DELETE /api/proxies`, `GET /api/health`).
 
 Chromium is auto-detected: `@sparticuz/chromium` on Vercel serverless, system Chrome/Chromium on Railway / Render / Docker / local.
 
@@ -19,8 +19,8 @@ gsearch-api scrapes search engines with plain HTTP. Some engines (Google, DuckDu
 | `q`       | required | Search query |
 | `engine`  | `google` | Single engine (back-compat) |
 | `engines` | *(none)* | Comma list tried in order; first engine that returns results wins (e.g. `google,bing`). Takes precedence over `engine`. |
-| `num`     | `20`     | Target unique results (max `100`). Google and Yahoo cap desktop SERPs at **~10 results per page** (`&num=100` is gone / ignored), so extra pages (`start=0,10,20,...`) are fetched automatically. Bing and others still take a higher per-page count. |
-| `pages`   | auto     | SERP pages to merge (max `10`). Omit to auto-fetch extra pages (`ceil(num/10)+1`, min `2`). |
+| `num`     | `20`     | Target unique results (max `100`). Google and Yahoo cap desktop SERPs at **~10 results per page** (`&num=100` is gone / ignored), so extra pages (`start=0,10,20,...`) are fetched until `num` unique URLs. Bing and others still take a higher per-page count. |
+| `pages`   | auto     | SERP pages to merge (max `10`). Omit to fetch `ceil(num/10)` pages for Google/Yahoo (stops early once `num` unique URLs). Other engines: 1 page. |
 | `start`   | `0`      | Pagination offset |
 | `hl`      | `en`     | Interface language |
 | `gl`      | `us`     | Country |
@@ -68,8 +68,23 @@ POST JSON is also accepted: `{ "url": "https://example.com", "max_pages": 3, "ma
 
 ### `GET /api/health`
 
-Cheap introspection for a load balancer / the operator: `pool` (shard config),
+Cheap introspection for a load balancer / the operator: `pool` (`proxies_available`, shard config; fetcher URL is never returned),
 `browser` (reuse + active/queued contexts), `cache` stats, `engines`, `features`.
+
+### `GET|POST|DELETE /api/proxies`
+
+Use your own HTTP proxies instead of the live/env pool. Credentials in listed URLs are masked (`http://***@host:port`).
+
+```
+curl -X POST http://localhost:3000/api/proxies \
+  -H 'Content-Type: application/json' \
+  -d '{"proxies":["http://user:pass@host:port"]}'
+
+curl http://localhost:3000/api/proxies
+curl -X DELETE http://localhost:3000/api/proxies
+```
+
+`POST` replaces the personal list (max `USER_PROXY_MAX`, default `50`). `DELETE` clears it and falls back to `PROXY_POOL` / live checked proxies. Search, batch, and crawl pick from this pool.
 
 #### Rotation & scaling (env vars)
 
@@ -81,11 +96,11 @@ interstitial), retries with another member before falling back to a direct reque
 |--------------------------|---------|-------------|
 | `PROXY_POOL`             | *(none)* | Newline **or** comma separated proxy URLs (`http://user:pass@host:port`). Lines starting with `#` are ignored. When unset, live proxies are fetched, checked, and used. |
 | `PROXY_FETCH`            | `1`     | Fetch + check proxies from the hardcoded live list (`0` disables) |
-| `PROXY_FETCH_URL`        | `.....` | Override live-list URL |
+| `PROXY_FETCH_URL`        | *(internal)* | Override live-list URL (never returned in API JSON) |
 | `PROXY_LIVE_MIN`         | `8`     | Stop checking once this many proxies pass |
 | `PROXY_CHECK_MAX`        | `30`    | Max candidates probed per refresh |
-| `PROXY_ATTEMPTS`         | `2`     | Max pool members tried per page |
-| `PROXY_FALLBACK_DIRECT`  | `1`     | Set to `0` to disable the final direct (no proxy) attempt |
+| `PROXY_ATTEMPTS`         | `2` (`1` with personal proxies) | Max pool members tried per page |
+| `PROXY_FALLBACK_DIRECT`  | `1` (`0` with personal proxies) | Final direct (no proxy) attempt. Off when `/api/proxies` is set so a paid exit is not skipped. |
 | `PROXY_WINDOW_MS`        | `28000` | Time budget per page (multiplied by `pages`) |
 | `PROXY_SHARD_TOTAL`      | `1`     | Split the pool across N instances (host 10 APIs -> `10`) |
 | `PROXY_SHARD_INDEX`      | `0`     | This instance's shard (`0..N-1`) — each gets a disjoint slice |
@@ -146,6 +161,7 @@ This repo is not Vercel-only. Long-lived hosts run `node server.js` (`npm start`
 | Host | How it starts | Config files |
 |------|----------------|--------------|
 | Local | `npm start` | `.env.example` |
+| Linux VPS / SSH (tmux) | detached `tmux` session running `node server.js` | `scripts/tmux-host.sh` |
 | Windows RDP (24/7) | Windows service (`nssm`) running `node server.js` | `.env`, NSSM / Task Scheduler |
 | Docker / VPS | `docker compose up --build` | `Dockerfile`, `docker-compose.yml` |
 | Railway | Docker build from `railway.toml` | `railway.toml`, `Dockerfile` |
@@ -188,6 +204,29 @@ npm start
 ```
 
 macOS / Windows: install Google Chrome, then `npm start`.
+
+#### tmux (survives SSH logout)
+
+On a Linux VPS or this box, keep the API alive after you disconnect:
+
+```
+# Debian / Ubuntu
+sudo apt-get install -y tmux
+
+# Detached session named gsearch (PORT 3000)
+bash scripts/tmux-host.sh start
+
+# Health / session
+bash scripts/tmux-host.sh status
+
+# Attach (Ctrl-b d to detach)
+bash scripts/tmux-host.sh attach
+
+# Stop
+bash scripts/tmux-host.sh stop
+```
+
+`scripts/tmux-host.sh restart` reloads the process. Logs append to `logs/server.log`. Same HTTP API as `npm start`. For reboot-proof hosting use systemd or Docker instead of tmux.
 
 Vercel CLI is optional (serverless emulator only):
 

@@ -38,6 +38,9 @@ test('health is public even when API_TOKEN is set', async () => {
   assert.equal(res.body.service, 'gsearch-renderer');
   assert.ok(res.body.runtime);
   assert.equal(res.body.features.crawl, true);
+  assert.equal(res.body.features.user_proxies, true);
+  assert.equal(res.body.pool.fetcher.url, undefined);
+  assert.equal(typeof res.body.pool.proxies_available, 'number');
   if (prev === undefined) delete process.env.API_TOKEN;
   else process.env.API_TOKEN = prev;
 });

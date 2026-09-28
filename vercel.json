@@ -5,6 +5,7 @@
     { "source": "/search", "destination": "/api/search" },
     { "source": "/batch", "destination": "/api/batch" },
     { "source": "/crawl", "destination": "/api/crawl" },
+    { "source": "/proxies", "destination": "/api/proxies" },
     { "source": "/health", "destination": "/api/health" }
   ]
 }

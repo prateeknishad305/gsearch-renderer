@@ -221,7 +221,6 @@ function setLivePoolForTests(list) {
 
 function fetcherInfo() {
   return {
-    url: fetchUrl(),
     enabled: enabled(),
     last_fetch_ms: state.last_fetch_ms,
     last_ok_ms: state.last_ok_ms,
