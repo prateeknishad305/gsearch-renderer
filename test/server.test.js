@@ -8,6 +8,8 @@ const batchHandler = require('../api/batch');
 const healthHandler = require('../api/health');
 const crawlHandler = require('../api/crawl');
 const proxiesHandler = require('../api/proxies');
+const enginesHandler = require('../api/engines');
+const statsHandler = require('../api/stats');
 
 test('route maps search, batch, health, crawl, proxies and aliases', () => {
   assert.equal(route('/api/search'), searchHandler);
@@ -21,6 +23,10 @@ test('route maps search, batch, health, crawl, proxies and aliases', () => {
   assert.equal(route('/crawl'), crawlHandler);
   assert.equal(route('/api/proxies'), proxiesHandler);
   assert.equal(route('/proxies'), proxiesHandler);
+  assert.equal(route('/api/engines'), enginesHandler);
+  assert.equal(route('/engines'), enginesHandler);
+  assert.equal(route('/api/stats'), statsHandler);
+  assert.equal(route('/stats'), statsHandler);
   assert.equal(route('/nope'), null);
 });
 

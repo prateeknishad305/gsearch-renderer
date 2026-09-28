@@ -2,7 +2,7 @@
 
 Headless Chromium SERP renderer for [gsearch-api](https://github.com/prateeknishad305/gsearch-api).
 
-Host this anywhere: **Vercel, Railway, Render, Docker, a VPS (tmux or systemd), a Windows RDP server (24/7), or your laptop**. Same HTTP API on every platform (`GET /api/search`, `POST /api/batch`, `GET /api/crawl`, `GET|POST|DELETE /api/proxies`, `GET /api/health`).
+Host this anywhere: **Vercel, Railway, Render, Docker, a VPS (tmux or systemd), a Windows RDP server (24/7), or your laptop**. Same HTTP API on every platform (`GET /api/search`, `POST /api/batch`, `GET /api/crawl`, `GET|POST|DELETE /api/proxies`, `GET /api/engines`, `GET /api/stats`, `GET /api/health`).
 
 Chromium is auto-detected: `@sparticuz/chromium` on Vercel serverless, system Chrome/Chromium on Railway / Render / Docker / local.
 
@@ -29,7 +29,9 @@ gsearch-api scrapes search engines with plain HTTP. Some engines (Google, DuckDu
 | `debug`   | `0`      | Set to `1` to skip the lite path/cache and include `debug_html` |
 | `token`   | *(none)* | API token when `API_TOKEN` is set on the deployment |
 
-Engines: `google`, `bing`, `brave`, `mojeek`, `startpage`, `yahoo`, `duckduckgo`, `duckduckgo_lite`, `qwant`.
+Engines: `google`, `bing`, `brave`, `mojeek`, `startpage`, `yahoo`, `duckduckgo`, `duckduckgo_lite`, `qwant`, `ecosia`, `swisscows`, `seznam`.
+
+`engines=google,bing` tries in order (fallback). `mode=merge` runs them in parallel and unions unique URLs. `engines=*` / `engines=all` tries every engine. Lite HTTP is used first for engines that serve static SERP HTML (DDG, Bing, Brave, Yahoo, Mojeek, Ecosia, Startpage); Chromium is the fallback.
 
 ### `POST /api/batch`
 
@@ -85,6 +87,14 @@ curl -X DELETE http://localhost:3000/api/proxies
 ```
 
 `POST` replaces the personal list (max `USER_PROXY_MAX`, default `50`). `DELETE` clears it and falls back to `PROXY_POOL` / live checked proxies. Search, batch, and crawl pick from this pool.
+
+### `GET /api/engines`
+
+Lists engines, whether each has a lite HTTP path, and circuit-breaker state.
+
+### `GET /api/stats`
+
+Per-engine ok/fail counters, p50/p95 latency, circuit snapshot, pool, browser.
 
 #### Rotation & scaling (env vars)
 

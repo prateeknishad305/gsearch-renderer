@@ -2,6 +2,7 @@
 
 const { crawl, MAX_PAGES, MAX_DEPTH } = require('./lib/crawler');
 const { send, cors, authOk, unauthorized, maskProxy } = require('./lib/http');
+const stats = require('./lib/stats');
 
 function parseBool(v, defaultVal) {
   if (v === undefined || v === null || v === '') return defaultVal;
@@ -65,6 +66,7 @@ module.exports = async (req, res) => {
       sameOriginOnly,
       proxy: p.proxy || undefined,
     });
+    stats.recordCrawl();
     return send(res, {
       success: true,
       start_url: r.start_url,

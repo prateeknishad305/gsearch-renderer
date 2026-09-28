@@ -5,12 +5,14 @@ const { searchEngine, autoPageCount } = require('./search');
 const { poolInfo } = require('./lib/proxyPool');
 const { getCache } = require('./lib/cache');
 const { send, cors, authOk, unauthorized } = require('./lib/http');
+const stats = require('./lib/stats');
 
 const MAX_QUERIES = Math.min(20, Math.max(1, parseInt(process.env.BATCH_MAX || '6', 10) || 6));
 const BATCH_BUDGET_MS = Math.max(5000, parseInt(process.env.BATCH_BUDGET_MS || '50000', 10) || 50000);
 
 function parseEngines(body) {
   const raw = body.engines || body.engine || 'google';
+  if (String(raw).trim() === '*' || String(raw).trim().toLowerCase() === 'all') return names();
   const list = String(raw).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
   return list.length ? list : ['google'];
 }
@@ -131,6 +133,7 @@ module.exports = async (req, res) => {
   }
 
   const durationMs = Date.now() - started;
+  stats.recordBatch();
   return send(res, {
     success: true,
     batch_size: queries.length,

@@ -36,6 +36,9 @@ module.exports = async (req, res) => {
       proxy_fetch: String(process.env.PROXY_FETCH || '1') !== '0',
       user_proxies: true,
       crawl: true,
+      merge: true,
+      circuit: true,
+      lite_engines: true,
     },
   });
 };

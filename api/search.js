@@ -1,11 +1,13 @@
 'use strict';
 
 const { ENGINES, names } = require('./lib/engines');
-const { fastLiteSearch } = require('./lib/lite');
+const { fastLiteSearch, ENDPOINTS } = require('./lib/lite');
 const { runQuery } = require('./lib/runner');
 const { getShardPool, getUserProxies, poolInfo, intEnv } = require('./lib/proxyPool');
 const { getCache } = require('./lib/cache');
 const { send, cors, authOk, unauthorized, maskProxy } = require('./lib/http');
+const circuit = require('./lib/circuit');
+const stats = require('./lib/stats');
 
 const MAX_NUM = 100;
 const MAX_PAGES = 10;
@@ -34,7 +36,7 @@ function autoPageCount(engine, num) {
 
 // Engines that have a plain-HTTP fast path. Turn the whole feature off with
 // env LITE_FAST=0, or skip per-engine with LITE_FAST_<ENGINE>=0.
-const LITE_ENGINES = new Set(['duckduckgo', 'duckduckgo_lite']);
+const LITE_ENGINES = new Set(Object.keys(ENDPOINTS));
 function liteEnabled(engine) {
   return (
     LITE_ENGINES.has(engine) &&
@@ -75,6 +77,7 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
     try {
       const lite = await fastLiteSearch({ engine, query, num: cap, hl, gl });
       if (lite.results && lite.results.length) {
+        circuit.record(engine, 'OK');
         return {
           results: lite.results.slice(0, cap),
           duration_ms: lite.duration_ms,
@@ -90,6 +93,12 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
     }
   }
 
+  if (circuit.isOpen(engine)) {
+    const e = new Error(`Engine "${engine}" circuit open after repeated failures`);
+    e.code = 'CIRCUIT_OPEN';
+    throw e;
+  }
+
   const deadline = Date.now() + intEnv('PROXY_WINDOW_MS', 28000) * pageCount;
   const merged = [];
   const seen = new Set();
@@ -99,42 +108,77 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
   let duration = 0;
   let lastErr = new Error('no search attempt could be made');
 
-  for (let i = 0; i < pageCount; i++) {
-    if (Date.now() > deadline) break;
-    const offset = start + i * step;
+  async function fetchPage(offset) {
     let pageResults = null;
-
+    let used = null;
+    let dur = 0;
+    let localAttempts = 0;
+    let err = lastErr;
     for (const candidate of buildTries(proxy)) {
       if (Date.now() > deadline) break;
-      attempts += 1;
+      localAttempts += 1;
       try {
         const r = await runQuery({ engine, query, num: perPage, start: offset, hl, gl, proxy: candidate, debug });
         pageResults = r.results;
-        duration += r.duration_ms;
-        proxyUsed = candidate;
+        dur = r.duration_ms;
+        used = candidate;
         break;
-      } catch (err) {
-        lastErr = err;
-        if (err && err.code === 'UNKNOWN_ENGINE') throw err;
+      } catch (caught) {
+        err = caught;
+        if (caught && caught.code === 'UNKNOWN_ENGINE') throw caught;
       }
     }
-
-    if (!pageResults) {
-      if (merged.length === 0) throw lastErr;
-      break;
-    }
-    pagesFetched += 1;
-    for (const item of pageResults) {
-      if (item && item.url && !seen.has(item.url)) {
-        seen.add(item.url);
-        merged.push(item);
-      }
-    }
-    if (pageResults.length === 0) break;
-    if (autoPages && merged.length >= num) break;
+    return { pageResults, used, dur, localAttempts, err };
   }
 
-  if (merged.length === 0) throw lastErr;
+  const parallel = pageCount > 1 && String(process.env.PAGE_PARALLEL || '1') !== '0';
+  if (parallel) {
+    const jobs = [];
+    for (let i = 0; i < pageCount; i++) jobs.push(fetchPage(start + i * step));
+    const settled = await Promise.all(jobs);
+    for (const one of settled) {
+      attempts += one.localAttempts;
+      lastErr = one.err || lastErr;
+      if (!one.pageResults) continue;
+      pagesFetched += 1;
+      duration += one.dur;
+      if (one.used) proxyUsed = one.used;
+      for (const item of one.pageResults) {
+        if (item && item.url && !seen.has(item.url)) {
+          seen.add(item.url);
+          merged.push(item);
+        }
+      }
+    }
+  } else {
+    for (let i = 0; i < pageCount; i++) {
+      if (Date.now() > deadline) break;
+      const one = await fetchPage(start + i * step);
+      attempts += one.localAttempts;
+      lastErr = one.err || lastErr;
+      if (!one.pageResults) {
+        if (merged.length === 0) throw lastErr;
+        break;
+      }
+      pagesFetched += 1;
+      duration += one.dur;
+      proxyUsed = one.used;
+      for (const item of one.pageResults) {
+        if (item && item.url && !seen.has(item.url)) {
+          seen.add(item.url);
+          merged.push(item);
+        }
+      }
+      if (one.pageResults.length === 0) break;
+      if (autoPages && merged.length >= num) break;
+    }
+  }
+
+  if (merged.length === 0) {
+    circuit.record(engine, lastErr && lastErr.code ? lastErr.code : 'ERROR');
+    throw lastErr;
+  }
+  circuit.record(engine, 'OK');
   return {
     results: merged.slice(0, autoPages ? Math.min(MAX_NUM, merged.length) : cap),
     duration_ms: duration,
@@ -154,8 +198,23 @@ async function renderSearch(opts) {
 
 function parseEngineList(req) {
   const raw = req.query.engines ? String(req.query.engines) : String(req.query.engine || 'google');
+  if (raw.trim() === '*' || raw.trim().toLowerCase() === 'all') return names();
   const list = raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
   return list.length ? list : ['google'];
+}
+
+function mergeUnique(lists, cap) {
+  const seen = new Set();
+  const out = [];
+  for (const list of lists) {
+    for (const item of list || []) {
+      if (!item || !item.url || seen.has(item.url)) continue;
+      seen.add(item.url);
+      out.push(item);
+      if (out.length >= cap) return out;
+    }
+  }
+  return out;
 }
 
 module.exports = async (req, res) => {
@@ -174,11 +233,11 @@ module.exports = async (req, res) => {
       service: 'gsearch-renderer',
       ok: true,
       usage:
-        'GET /api/search?q=<query>&engine=<name>  OR  engines=<name,name,...>&num=&start=&pages=&hl=&gl=&proxy=&nocache=&token=. Response includes duration_ms (render) and response_time_ms (wall clock). Omit pages to auto-fetch extra SERP pages.',
+        'GET /api/search?q=<query>&engine=<name>  OR  engines=<name,name,...|&*>  mode=fallback|merge  num= pages= hl= gl= proxy= nocache= token=',
       engines: names(),
       pool: poolInfo(),
       note:
-        'engines= enables server-side fallback (tries each in order until one returns results). pages= merges multiple result pages per dork for more URLs. Results of successful queries are cached (CACHE_TTL_MS); pass nocache=1 to bypass.',
+        'engines= fallback in order (default). mode=merge runs listed engines in parallel and unions unique URLs. engines=* tries every engine. Lite HTTP is used first when the engine serves static SERP HTML.',
     });
   }
   if (q.length > MAX_QUERY_LEN) {
@@ -205,16 +264,55 @@ module.exports = async (req, res) => {
   const gl = String(req.query.gl || 'us').slice(0, 8);
   const proxy = String(req.query.proxy || '').trim();
   const debug = req.query.debug === '1';
+  const mode = String(req.query.mode || 'fallback').toLowerCase() === 'merge' ? 'merge' : 'fallback';
   const useCache = req.query.nocache !== '1' && !debug && !proxy;
   const t0 = Date.now();
 
   const cache = getCache();
-  const cacheKey = JSON.stringify(['v3', engineList.join(','), q, num, pagesGiven ? pages : 'auto', start, hl, gl]);
+  const cacheKey = JSON.stringify(['v4', engineList.join(','), mode, q, num, pagesGiven ? pages : 'auto', start, hl, gl]);
   if (useCache) {
     const hit = cache.get(cacheKey);
     if (hit) {
       return send(res, { ...hit, cached: true, response_time_ms: Date.now() - t0 });
     }
+  }
+
+  if (mode === 'merge' && engineList.length > 1) {
+    const settled = await Promise.all(
+      engineList.map(async (engine) => {
+        try {
+          const r = await searchEngine({ engine, query: q, num, pages, start, hl, gl, proxy, debug, autoPages });
+          return { engine, ok: true, r };
+        } catch (err) {
+          return { engine, ok: false, err };
+        }
+      })
+    );
+    const ok = settled.filter((s) => s.ok && s.r && s.r.results && s.r.results.length);
+    const results = mergeUnique(ok.map((s) => s.r.results), num);
+    const duration = Math.max(0, ...ok.map((s) => s.r.duration_ms || 0));
+    const body = {
+      engine: ok.length ? ok.map((s) => s.engine).join(',') : engineList[0],
+      engines_tried: engineList,
+      engines_ok: ok.map((s) => s.engine),
+      mode: 'merge',
+      query: q,
+      success: results.length > 0,
+      count: results.length,
+      results,
+      duration_ms: duration,
+      response_time_ms: Date.now() - t0,
+      source: ok.map((s) => s.r.source).filter(Boolean).join(',') || 'none',
+    };
+    stats.recordSearch({
+      engine: body.engine,
+      ok: body.success,
+      source: ok[0] && ok[0].r.source,
+      duration_ms: Date.now() - t0,
+      code: body.success ? 'OK' : 'EMPTY_RESULTS',
+    });
+    if (useCache && results.length) cache.set(cacheKey, body);
+    return send(res, body);
   }
 
   let lastErr = new Error('no engine produced a result');
@@ -236,6 +334,7 @@ module.exports = async (req, res) => {
         source: r.source,
         proxy: maskProxy(r.proxy),
       };
+      stats.recordSearch({ engine, ok: true, source: r.source, duration_ms: Date.now() - t0, code: 'OK' });
       if (useCache && r.results.length) cache.set(cacheKey, body);
       return send(res, body);
     } catch (err) {
@@ -246,6 +345,13 @@ module.exports = async (req, res) => {
     }
   }
 
+  stats.recordSearch({
+    engine: engineList[0],
+    ok: false,
+    source: null,
+    duration_ms: Date.now() - t0,
+    code: lastErr.code || 'ERROR',
+  });
   return send(res, {
     engine: engineList[0],
     engines_tried: engineList,

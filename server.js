@@ -39,6 +39,8 @@ const batchHandler = require('./api/batch');
 const healthHandler = require('./api/health');
 const crawlHandler = require('./api/crawl');
 const proxiesHandler = require('./api/proxies');
+const enginesHandler = require('./api/engines');
+const statsHandler = require('./api/stats');
 
 const PORT = parseInt(process.env.PORT, 10) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -114,6 +116,8 @@ function route(pathname) {
   if (path === '/api/health' || path === '/health') return healthHandler;
   if (path === '/api/crawl' || path === '/crawl') return crawlHandler;
   if (path === '/api/proxies' || path === '/proxies') return proxiesHandler;
+  if (path === '/api/engines' || path === '/engines') return enginesHandler;
+  if (path === '/api/stats' || path === '/stats') return statsHandler;
   return null;
 }
 
@@ -132,6 +136,8 @@ async function handle(req, res) {
         batch: 'POST /api/batch',
         crawl: 'GET /api/crawl?url=<https://example.com>',
         proxies: 'GET|POST|DELETE /api/proxies',
+        engines: 'GET /api/engines',
+        stats: 'GET /api/stats',
         health: 'GET /api/health',
       },
     });

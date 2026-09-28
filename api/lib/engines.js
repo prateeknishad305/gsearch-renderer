@@ -108,13 +108,15 @@ function parseBing() {
   }
   const results = [];
   const seen = new Set();
-  document.querySelectorAll('li.b_algo').forEach((li) => {
-    const a = li.querySelector('h2 a');
+  const cards = document.querySelectorAll('li.b_algo, #b_results .b_algo, .b_algo');
+  cards.forEach((li) => {
+    const a = li.querySelector('h2 a, .b_title a, a[href]');
     if (!a) return;
-    const title = (a.textContent || '').trim();
+    const title = ((li.querySelector('h2') && li.querySelector('h2').textContent) || a.textContent || '').trim();
     const url = decodeHref(a.getAttribute('href') || '');
-    if (!title || !/^https?:\/\//i.test(url) || seen.has(url)) return;
-    const cap = li.querySelector('.b_caption p, p');
+    if (!title || title.length < 2 || !/^https?:\/\//i.test(url) || seen.has(url)) return;
+    if (/bing\.com$/i.test((() => { try { return new URL(url).hostname; } catch { return ''; } })())) return;
+    const cap = li.querySelector('.b_caption p, p.b_lineclamp, p');
     const snippet = cap ? (cap.textContent || '').trim() : '';
     seen.add(url);
     results.push({ title, url, snippet });
@@ -395,8 +397,86 @@ function parseQwant() {
     if (!/^https?:\/\//i.test(url) || isQwantHost(url) || seen.has(url)) return;
     const titleEl = el.querySelector('h2, h3, [class*="title"]');
     const title = ((titleEl && titleEl.textContent) || a.textContent || '').replace(/\s+/g, ' ').trim();
-    if (!title || title.length < 8 || NAV_EXCLUDE.has(title.toLowerCase())) return;
+    if (!title || title.length < 3 || NAV_EXCLUDE.has(title.toLowerCase())) return;
     const s = el.querySelector('p, [class*="snippet"], [class*="desc"]');
+    seen.add(url);
+    results.push({ title, url, snippet: s ? (s.textContent || '').trim() : '' });
+  });
+  return results;
+}
+
+function parseEcosia() {
+  function isEcosiaHost(url) {
+    try {
+      const h = new URL(url).hostname;
+      return h === 'ecosia.org' || h.endsWith('.ecosia.org');
+    } catch {
+      return true;
+    }
+  }
+  const results = [];
+  const seen = new Set();
+  document.querySelectorAll('article.result, .result, [data-test-id="mainline-result-web"]').forEach((el) => {
+    const a = el.querySelector('a.result-title, a[data-test-id="result-link"], h2 a, a[href^="http"]');
+    if (!a) return;
+    const url = a.getAttribute('href') || '';
+    if (!/^https?:\/\//i.test(url) || isEcosiaHost(url) || seen.has(url)) return;
+    const titleEl = el.querySelector('a.result-title, [data-test-id="result-title"], h2, h3');
+    const title = ((titleEl && titleEl.textContent) || a.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!title || title.length < 2) return;
+    const s = el.querySelector('p.result-snippet, [data-test-id="result-snippet"], p');
+    seen.add(url);
+    results.push({ title, url, snippet: s ? (s.textContent || '').trim() : '' });
+  });
+  return results;
+}
+
+function parseSwisscows() {
+  function isSwissHost(url) {
+    try {
+      const h = new URL(url).hostname;
+      return h === 'swisscows.com' || h.endsWith('.swisscows.com');
+    } catch {
+      return true;
+    }
+  }
+  const results = [];
+  const seen = new Set();
+  document.querySelectorAll('.web-results .item, .item.web, article, .result').forEach((el) => {
+    const a = el.querySelector('a[href^="http"]');
+    if (!a) return;
+    const url = a.getAttribute('href') || '';
+    if (!/^https?:\/\//i.test(url) || isSwissHost(url) || seen.has(url)) return;
+    const titleEl = el.querySelector('h2, h3, .title, a');
+    const title = ((titleEl && titleEl.textContent) || a.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!title || title.length < 2) return;
+    const s = el.querySelector('p, .description, .snippet');
+    seen.add(url);
+    results.push({ title, url, snippet: s ? (s.textContent || '').trim() : '' });
+  });
+  return results;
+}
+
+function parseSeznam() {
+  function isSeznamHost(url) {
+    try {
+      const h = new URL(url).hostname;
+      return h === 'seznam.cz' || h.endsWith('.seznam.cz') || h === 'search.seznam.cz';
+    } catch {
+      return true;
+    }
+  }
+  const results = [];
+  const seen = new Set();
+  document.querySelectorAll('[data-dot="results"] a, .Result, article, h3 a').forEach((el) => {
+    const a = el.tagName === 'A' ? el : el.querySelector('a[href]');
+    if (!a) return;
+    const url = a.getAttribute('href') || '';
+    if (!/^https?:\/\//i.test(url) || isSeznamHost(url) || seen.has(url)) return;
+    const title = (a.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!title || title.length < 2) return;
+    const wrap = a.closest('article, .Result, li, div') || a.parentElement;
+    const s = wrap && wrap.querySelector('p, .ogm-result-description, .description');
     seen.add(url);
     results.push({ title, url, snippet: s ? (s.textContent || '').trim() : '' });
   });
@@ -501,10 +581,38 @@ const ENGINES = {
       if (start > 0) p.set('offset', String(start));
       return `https://www.qwant.com/?${p.toString()}`;
     },
-    ready: '[data-testid*="web-result"] a[href^="http"], article a[href^="http"], main a[href^="http"]',
-    parse: parseQwant,
-  },
-};
+      ready: '[data-testid*="web-result"] a[href^="http"], article a[href^="http"], main a[href^="http"]',
+      parse: parseQwant,
+    },
+    ecosia: {
+      url: ({ q, start, gl }) => {
+        const p = new URLSearchParams({ q });
+        if (gl) p.set('c', String(gl).toLowerCase());
+        if (start > 0) p.set('p', String(Math.floor(start / 10) + 1));
+        return `https://www.ecosia.org/search?${p.toString()}`;
+      },
+      ready: 'article.result a[href^="http"], .result a.result-title, [data-test-id="mainline-result-web"] a',
+      parse: parseEcosia,
+    },
+    swisscows: {
+      url: ({ q, start }) => {
+        const p = new URLSearchParams({ query: q, uiLanguage: 'en', region: 'en-US' });
+        if (start > 0) p.set('offset', String(start));
+        return `https://swisscows.com/en/web?${p.toString()}`;
+      },
+      ready: '.web-results .item a[href^="http"], .item.web a[href^="http"], article a[href^="http"]',
+      parse: parseSwisscows,
+    },
+    seznam: {
+      url: ({ q, start }) => {
+        const p = new URLSearchParams({ q });
+        if (start > 0) p.set('from', String(start));
+        return `https://search.seznam.cz/?${p.toString()}`;
+      },
+      ready: '[data-dot="results"] a[href^="http"], .Result a[href^="http"], h3 a[href^="http"]',
+      parse: parseSeznam,
+    },
+  };
 
 function names() {
   return Object.keys(ENGINES);
@@ -529,14 +637,18 @@ function detectBlock(engine) {
     yahoo: 'div.algo, li.algo, .algo-sr',
     duckduckgo: '#links .result',
     duckduckgo_lite: 'a.result-link',
-    qwant: '[data-testid*="web-result"] a[href^="http"], article a[href^="http"]',
+     qwant: '[data-testid*="web-result"] a[href^="http"], article a[href^="http"]',
+     ecosia: 'article.result a[href^="http"], .result a.result-title',
+     swisscows: '.web-results .item a[href^="http"], article a[href^="http"]',
+     seznam: '[data-dot="results"] a[href^="http"], h3 a[href^="http"]',
   };
   const hasResults = !!document.querySelector(resultSelectors[engine] || 'html');
 
   const STORE_NAME = {
     google: 'Google', bing: 'Bing', brave: 'Brave', mojeek: 'Mojeek',
     startpage: 'Startpage', yahoo: 'Yahoo', duckduckgo: 'DuckDuckGo',
-    duckduckgo_lite: 'DuckDuckGo', qwant: 'Qwant',
+     duckduckgo_lite: 'DuckDuckGo', qwant: 'Qwant',
+     ecosia: 'Ecosia', swisscows: 'Swisscows', seznam: 'Seznam',
   };
   const store = STORE_NAME[engine] || engine;
 

@@ -6,7 +6,7 @@ const { ENGINES, names } = require('../api/lib/engines');
 
 test('supports the expected engines', () => {
   const n = names();
-  for (const e of ['google', 'bing', 'brave', 'mojeek', 'startpage', 'yahoo', 'duckduckgo', 'duckduckgo_lite', 'qwant']) {
+  for (const e of ['google', 'bing', 'brave', 'mojeek', 'startpage', 'yahoo', 'duckduckgo', 'duckduckgo_lite', 'qwant', 'ecosia', 'swisscows', 'seznam']) {
     assert.ok(n.includes(e), `missing engine ${e}`);
   }
 });
@@ -84,4 +84,23 @@ test('every engine builds an https URL', () => {
     const u = ENGINES[name].url({ q: 'test query', num: 20, start: 0, hl: 'en', gl: 'us' });
     assert.ok(/^https:\/\//.test(u), `${name} url is not https: ${u}`);
   }
+});
+
+test('ecosia URL paginates with p', () => {
+  const u0 = ENGINES.ecosia.url({ q: 'x', start: 0, gl: 'de' });
+  assert.match(u0, /ecosia\.org\/search/);
+  assert.equal(new URL(u0).searchParams.get('c'), 'de');
+  assert.equal(new URL(u0).searchParams.get('p'), null);
+  const u2 = ENGINES.ecosia.url({ q: 'x', start: 10, gl: 'de' });
+  assert.equal(new URL(u2).searchParams.get('p'), '2');
+});
+
+test('swisscows and seznam URLs paginate', () => {
+  const s0 = new URL(ENGINES.swisscows.url({ q: 'x', start: 0 }));
+  assert.match(s0.href, /swisscows\.com/);
+  assert.equal(s0.searchParams.get('offset'), null);
+  const s2 = new URL(ENGINES.swisscows.url({ q: 'x', start: 10 }));
+  assert.equal(s2.searchParams.get('offset'), '10');
+  const z2 = new URL(ENGINES.seznam.url({ q: 'x', start: 10 }));
+  assert.equal(z2.searchParams.get('from'), '10');
 });

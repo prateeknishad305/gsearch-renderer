@@ -6,6 +6,8 @@
     { "source": "/batch", "destination": "/api/batch" },
     { "source": "/crawl", "destination": "/api/crawl" },
     { "source": "/proxies", "destination": "/api/proxies" },
+    { "source": "/engines", "destination": "/api/engines" },
+    { "source": "/stats", "destination": "/api/stats" },
     { "source": "/health", "destination": "/api/health" }
   ]
 }

@@ -24,6 +24,39 @@ const ENDPOINTS = {
     if (s) p.set('s', String(s));
     return `https://lite.duckduckgo.com/lite/?${p.toString()}`;
   },
+  bing: ({ q, num, s, gl }) => {
+    const p = new URLSearchParams({ q, count: String(num || 10) });
+    if (gl) p.set('cc', gl);
+    if (s) p.set('first', String(s + 1));
+    return `https://www.bing.com/search?${p.toString()}`;
+  },
+  brave: ({ q, s, gl }) => {
+    const p = new URLSearchParams({ q, source: 'web' });
+    if (gl) p.set('country', gl);
+    if (s) p.set('offset', String(s));
+    return `https://search.brave.com/search?${p.toString()}`;
+  },
+  mojeek: ({ q, s }) => {
+    const p = new URLSearchParams({ q });
+    if (s) p.set('s', String(s));
+    return `https://www.mojeek.com/search?${p.toString()}`;
+  },
+  yahoo: ({ q, s }) => {
+    const p = new URLSearchParams({ p: q, n: '10' });
+    if (s) p.set('b', String(s + 1));
+    return `https://search.yahoo.com/search?${p.toString()}`;
+  },
+  ecosia: ({ q, s, gl }) => {
+    const p = new URLSearchParams({ q });
+    if (gl) p.set('c', String(gl).toLowerCase());
+    if (s) p.set('p', String(Math.floor(s / 10) + 1));
+    return `https://www.ecosia.org/search?${p.toString()}`;
+  },
+  startpage: ({ q, s }) => {
+    const p = new URLSearchParams({ query: q });
+    if (s) p.set('page', String(Math.floor(s / 10) + 1));
+    return `https://www.startpage.com/sp/search?${p.toString()}`;
+  },
 };
 
 function stripTags(s) {
@@ -89,12 +122,89 @@ const PARSERS = {
     }
     return results;
   },
+  bing: (html) => parseAnchorBlocks(html, {
+    hostRe: /bing\.com$/i,
+    titleRe: /<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
+  }),
+  brave: (html) => parseAnchorBlocks(html, {
+    hostRe: /brave\.com$/i,
+    titleRe: /<a[^>]+class="[^"]*\bl1\b[^"]*"[^>]+href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
+  }),
+  mojeek: (html) => parseAnchorBlocks(html, {
+    hostRe: /mojeek\.com$/i,
+    titleRe: /<a[^>]+class="[^"]*\bob\b[^"]*"[^>]+href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
+  }),
+  yahoo: (html) => parseYahooLite(html),
+  ecosia: (html) => parseAnchorBlocks(html, {
+    hostRe: /ecosia\.org$/i,
+    titleRe: /<a[^>]+href="(https?:\/\/[^"]+)"[^>]*class="[^"]*result-title[^"]*"[^>]*>([\s\S]*?)<\/a>/gi,
+  }),
+  startpage: (html) => parseAnchorBlocks(html, {
+    hostRe: /startpage\.com$/i,
+    titleRe: /<(?:h2|h3)[^>]*>\s*<a[^>]+href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
+  }),
 };
+
+function hostOf(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
+  }
+}
+
+function parseAnchorBlocks(html, { hostRe, titleRe }) {
+  const results = [];
+  const seen = new Set();
+  const re = new RegExp(titleRe.source, titleRe.flags);
+  let m;
+  while ((m = re.exec(html))) {
+    let url = decodeEntities(m[1]);
+    if (url.startsWith('//')) url = `https:${url}`;
+    if (!/^https?:\/\//i.test(url)) continue;
+    if (hostRe.test(hostOf(url))) continue;
+    const title = decodeEntities(stripTags(m[2]));
+    if (!title || title.length < 2 || seen.has(url)) continue;
+    seen.add(url);
+    results.push({ title, url, snippet: '' });
+  }
+  return results;
+}
+
+function parseYahooLite(html) {
+  const results = [];
+  const seen = new Set();
+  const re = /<h3[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+  let m;
+  while ((m = re.exec(html))) {
+    let url = decodeEntities(m[1]);
+    if (url.includes('/RU=')) {
+      const ru = url.match(/\/RU=([^/]+)/);
+      if (ru) {
+        try {
+          const dec = decodeURIComponent(ru[1]);
+          if (/^https?:\/\//i.test(dec)) url = dec;
+        } catch {
+          /* ignore */
+        }
+      }
+    }
+    if (!/^https?:\/\//i.test(url)) continue;
+    const h = hostOf(url);
+    if (/yahoo\.com$|yimg\.com$/i.test(h)) continue;
+    const title = decodeEntities(stripTags(m[2]));
+    if (!title || title.length < 2 || seen.has(url)) continue;
+    seen.add(url);
+    results.push({ title, url, snippet: '' });
+  }
+  return results;
+}
 
 function isBlockedPage(html, engine) {
   const low = html.toLowerCase();
-  if (/\banomaly/i.test(low)) return true; // DDG robot detection
+  if (/\banomaly/i.test(low)) return true;
   if (engine === 'duckduckgo' && /id="captcha"/i.test(low)) return true;
+  if (/unusual traffic|enablejs|prove you are human|verify you are human|protected by altcha|verification required/i.test(low)) return true;
   return false;
 }
 
@@ -146,7 +256,7 @@ async function fastLiteSearch({ engine, query, num = 20, hl = 'en', gl = 'us' })
 
   for (let i = 0; i < pageCount; i++) {
     if (results.length >= num) break;
-    const url = build({ q: query, kl, s: i * 10 || undefined });
+    const url = build({ q: query, kl, s: i * 10 || undefined, num, gl });
     try {
       const html = await fetchLitePage(url, engine);
       let added = 0;
@@ -177,4 +287,4 @@ async function fastLiteSearch({ engine, query, num = 20, hl = 'en', gl = 'us' })
   };
 }
 
-module.exports = { fastLiteSearch, ENDPOINTS };
+module.exports = { fastLiteSearch, ENDPOINTS, PARSERS };
