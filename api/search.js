@@ -3,11 +3,24 @@
 const { ENGINES, names } = require('./lib/engines');
 const { fastLiteSearch, ENDPOINTS } = require('./lib/lite');
 const { runQuery } = require('./lib/runner');
-const { getShardPool, getUserProxies, poolInfo, intEnv } = require('./lib/proxyPool');
+const {
+  getShardPool,
+  getUserProxies,
+  poolInfo,
+  intEnv,
+  altProxy,
+  takeGoogleProxy,
+  peekStickyGoogleProxy,
+  setStickyGoogleProxy,
+  dropStickyGoogleProxy,
+  proxyIdentity,
+} = require('./lib/proxyPool');
 const { getCache } = require('./lib/cache');
 const { send, cors, authOk, unauthorized, maskProxy } = require('./lib/http');
 const circuit = require('./lib/circuit');
 const stats = require('./lib/stats');
+const g = require('./lib/google');
+const googleIp = require('./lib/googleIp');
 
 const MAX_NUM = 100;
 const MAX_PAGES = 10;
@@ -47,7 +60,66 @@ function liteEnabled(engine) {
 
 // Builds the ordered list of proxies to try for one page: random pool members
 // (bounded by PROXY_ATTEMPTS) followed by a direct attempt unless disabled.
-function buildTries(explicitProxy) {
+function isNetFail(err) {
+  const m = String((err && err.message) || err || '');
+  return /ERR_EMPTY_RESPONSE|ERR_CONNECTION|ERR_TUNNEL|ERR_SOCKS|ERR_TIMED_OUT|ERR_PROXY|ERR_HTTP2|net::ERR_|Navigation timeout|Timeout|ECONNRESET|ENOTFOUND/i.test(m);
+}
+
+function retryAttempts(dflt) {
+  const raw = process.env.MAX_RETRIES;
+  if (raw != null && raw !== '') {
+    const n = parseInt(raw, 10);
+    if (Number.isFinite(n) && n >= 0) return Math.max(1, n + 1);
+  }
+  return dflt;
+}
+
+function requestTimeoutMs() {
+  const v = parseInt(process.env.REQUEST_TIMEOUT, 10);
+  if (Number.isFinite(v) && v > 0) return v;
+  return intEnv('PROXY_WINDOW_MS', 28000);
+}
+
+function buildGoogleTries(explicitProxy, stickyKey) {
+  if (explicitProxy) return [g.preferHttp(explicitProxy)];
+  if (process.env.PROXY_SERVER === undefined) {
+    try {
+      const { getLivePool, refreshLivePool } = require('./lib/proxyFetch');
+      if (!getLivePool().length) refreshLivePool().catch(() => {});
+    } catch {
+      /* ignore */
+    }
+  }
+  let pool = getShardPool().map((p) => g.preferHttp(p));
+  pool = googleIp.pickOpen(pool);
+  const tries = [];
+  const seen = new Set();
+  const sticky = peekStickyGoogleProxy(stickyKey);
+  if (sticky && !googleIp.isOpen(sticky)) {
+    const one = g.preferHttp(sticky);
+    tries.push(one);
+    seen.add(proxyIdentity(one));
+  }
+  const max = Math.min(pool.length, retryAttempts(intEnv('GOOGLE_PROXY_ATTEMPTS', intEnv('PROXY_ATTEMPTS', 6))));
+  while (tries.length < max) {
+    const next = takeGoogleProxy(pool, seen);
+    if (!next) break;
+    const id = proxyIdentity(next);
+    if (seen.has(id)) break;
+    seen.add(id);
+    tries.push(next);
+  }
+  const user = getUserProxies().length > 0;
+  const fallbackDefault = user ? '0' : '1';
+  const fallbackDirect = String(process.env.PROXY_FALLBACK_DIRECT || fallbackDefault) !== '0';
+  if (fallbackDirect && !tries.includes(null)) tries.push(null);
+  return tries.length ? tries : [null];
+}
+
+function buildTries(explicitProxy, proxyless, engine, stickyKey) {
+  const google = engine === 'google';
+  if (proxyless) return [null];
+  if (google) return buildGoogleTries(explicitProxy, stickyKey);
   if (explicitProxy) return [explicitProxy];
   try {
     const { getLivePool, refreshLivePool } = require('./lib/proxyFetch');
@@ -57,8 +129,13 @@ function buildTries(explicitProxy) {
   }
   const pool = getShardPool().sort(() => Math.random() - 0.5);
   const user = getUserProxies().length > 0;
-  const picks = Math.min(pool.length, intEnv('PROXY_ATTEMPTS', user ? 1 : 2));
-  const tries = pool.slice(0, picks);
+  const picks = Math.min(pool.length, retryAttempts(intEnv('PROXY_ATTEMPTS', user ? 1 : 2)));
+  const tries = [];
+  for (const p of pool.slice(0, picks)) {
+    tries.push(p);
+    const alt = altProxy(p);
+    if (alt && !tries.includes(alt)) tries.push(alt);
+  }
   const fallbackDefault = user ? '0' : '1';
   const fallbackDirect = String(process.env.PROXY_FALLBACK_DIRECT || fallbackDefault) !== '0';
   if (fallbackDirect || tries.length === 0) tries.push(null);
@@ -67,7 +144,7 @@ function buildTries(explicitProxy) {
 
 // Runs one engine, optionally across multiple result pages, merging unique URLs.
 // autoPages=true keeps fetching until `num` unique URLs (or MAX_PAGES).
-async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en', gl = 'us', proxy, debug, autoPages = false }) {
+async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en', gl = 'us', proxy, debug, autoPages = false, proxyless = false, liteOnly = false }) {
   const pageCount = Math.min(Math.max(1, pages), MAX_PAGES);
   const step = pageStep(engine, num);
   const perPage = perPageNum(engine, num);
@@ -75,7 +152,7 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
 
   if (!debug && liteEnabled(engine)) {
     try {
-      const lite = await fastLiteSearch({ engine, query, num: cap, hl, gl });
+      const lite = await fastLiteSearch({ engine, query, num: cap, hl, gl, start });
       if (lite.results && lite.results.length) {
         circuit.record(engine, 'OK');
         return {
@@ -89,17 +166,26 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
         };
       }
     } catch {
-      /* fall through to Chromium */
+      if (liteOnly) {
+        const e = new Error(`Engine "${engine}" lite path empty`);
+        e.code = 'LITE_EMPTY';
+        throw e;
+      }
     }
   }
+  if (liteOnly) {
+    const e = new Error(`Engine "${engine}" has no lite results`);
+    e.code = 'LITE_EMPTY';
+    throw e;
+  }
 
-  if (circuit.isOpen(engine)) {
+  if (engine !== 'google' && circuit.isOpen(engine)) {
     const e = new Error(`Engine "${engine}" circuit open after repeated failures`);
     e.code = 'CIRCUIT_OPEN';
     throw e;
   }
 
-  const deadline = Date.now() + intEnv('PROXY_WINDOW_MS', 28000) * pageCount;
+  const deadline = Date.now() + requestTimeoutMs() * pageCount;
   const merged = [];
   const seen = new Set();
   let attempts = 0;
@@ -107,6 +193,7 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
   let proxyUsed = null;
   let duration = 0;
   let lastErr = new Error('no search attempt could be made');
+  const stickyKey = engine === 'google' ? `g:${query}|${hl}|${gl}` : '';
 
   async function fetchPage(offset) {
     let pageResults = null;
@@ -114,24 +201,60 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
     let dur = 0;
     let localAttempts = 0;
     let err = lastErr;
-    for (const candidate of buildTries(proxy)) {
+    const candidates = buildTries(proxy, proxyless, engine, stickyKey);
+    let skipProxies = false;
+    for (const candidate of candidates) {
       if (Date.now() > deadline) break;
+      if (skipProxies && candidate) continue;
+      if (engine === 'google' && googleIp.shouldSkip(candidate)) continue;
+      if (engine === 'google' && candidate) {
+        const ok = await g.probeProxy(candidate);
+        if (!ok) {
+          googleIp.record(candidate, 'ERROR');
+          continue;
+        }
+      }
       localAttempts += 1;
       try {
         const r = await runQuery({ engine, query, num: perPage, start: offset, hl, gl, proxy: candidate, debug });
         pageResults = r.results;
         dur = r.duration_ms;
         used = candidate;
+        if (engine === 'google' && candidate) setStickyGoogleProxy(stickyKey, candidate);
         break;
       } catch (caught) {
         err = caught;
         if (caught && caught.code === 'UNKNOWN_ENGINE') throw caught;
+        if (engine === 'google') dropStickyGoogleProxy(stickyKey);
+        if (engine === 'google' && candidate && caught && (caught.code === 'BLOCKED' || caught.code === 'SORRY')) {
+          skipProxies = true;
+        }
+      }
+    }
+    if (!pageResults && proxyless && isNetFail(err) && String(process.env.PROXYLESS_STRICT || '0') !== '1') {
+      for (const candidate of buildTries(null, false, engine, stickyKey)) {
+        if (Date.now() > deadline) break;
+        if (candidate == null) continue;
+        localAttempts += 1;
+        try {
+          const r = await runQuery({ engine, query, num: perPage, start: offset, hl, gl, proxy: candidate, debug });
+          pageResults = r.results;
+          dur = r.duration_ms;
+          used = candidate;
+          break;
+        } catch (caught) {
+          err = caught;
+          if (caught && caught.code === 'UNKNOWN_ENGINE') throw caught;
+        }
       }
     }
     return { pageResults, used, dur, localAttempts, err };
   }
 
-  const parallel = pageCount > 1 && String(process.env.PAGE_PARALLEL || '1') !== '0';
+  const parallel =
+    pageCount > 1 &&
+    String(process.env.PAGE_PARALLEL || '1') !== '0' &&
+    (engine !== 'google' || g.pageParallel());
   if (parallel) {
     const jobs = [];
     for (let i = 0; i < pageCount; i++) jobs.push(fetchPage(start + i * step));
@@ -222,6 +345,9 @@ module.exports = async (req, res) => {
     cors(res);
     return res.status(204).end();
   }
+  if (req.method === 'POST' || req.method === 'PUT') {
+    return require('./serper')(req, res);
+  }
   if (req.method !== 'GET') {
     return send(res, { error: 'Method not allowed', http_status: 405 });
   }
@@ -253,7 +379,7 @@ module.exports = async (req, res) => {
     });
   }
 
-  const num = Math.min(Math.max(1, Number(req.query.num) || 20), MAX_NUM);
+  const num = Math.min(Math.max(1, Number(req.query.num) || 10), MAX_NUM);
   const pagesGiven = req.query.pages !== undefined && req.query.pages !== '';
   const autoPages = !pagesGiven;
   const pages = pagesGiven
@@ -264,12 +390,13 @@ module.exports = async (req, res) => {
   const gl = String(req.query.gl || 'us').slice(0, 8);
   const proxy = String(req.query.proxy || '').trim();
   const debug = req.query.debug === '1';
+  const proxyless = req.query.proxyless === '1' || req.query.proxyless === 'true';
   const mode = String(req.query.mode || 'fallback').toLowerCase() === 'merge' ? 'merge' : 'fallback';
-  const useCache = req.query.nocache !== '1' && !debug && !proxy;
+  const useCache = req.query.nocache !== '1' && !debug && !proxy && !proxyless;
   const t0 = Date.now();
 
   const cache = getCache();
-  const cacheKey = JSON.stringify(['v4', engineList.join(','), mode, q, num, pagesGiven ? pages : 'auto', start, hl, gl]);
+  const cacheKey = JSON.stringify(['v4', engineList.join(','), mode, q, num, pagesGiven ? pages : 'auto', start, hl, gl, proxyless ? 1 : 0]);
   if (useCache) {
     const hit = cache.get(cacheKey);
     if (hit) {
@@ -281,7 +408,7 @@ module.exports = async (req, res) => {
     const settled = await Promise.all(
       engineList.map(async (engine) => {
         try {
-          const r = await searchEngine({ engine, query: q, num, pages, start, hl, gl, proxy, debug, autoPages });
+          const r = await searchEngine({ engine, query: q, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless });
           return { engine, ok: true, r };
         } catch (err) {
           return { engine, ok: false, err };
@@ -318,7 +445,7 @@ module.exports = async (req, res) => {
   let lastErr = new Error('no engine produced a result');
   for (const engine of engineList) {
     try {
-      const r = await searchEngine({ engine, query: q, num, pages, start, hl, gl, proxy, debug, autoPages });
+      const r = await searchEngine({ engine, query: q, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless });
       const body = {
         engine,
         engines_tried: engineList.slice(0, engineList.indexOf(engine) + 1),

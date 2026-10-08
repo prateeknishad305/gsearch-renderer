@@ -1,13 +1,8 @@
 'use strict';
 
-// Plain-HTTP (no Chromium) SERP fetcher for engines that tolerate scraping.
-// Used as a fast path before any browser render is attempted, so a dork that
-// would normally take 15-19s through headless Chromium + proxy rotation can
-// resolve in ~1s. Engines here must serve enough organic links to static HTML.
-//
-// Supported engines (config key => endpoint):
-//   duckduckgo       -> https://html.duckduckgo.com/html/
-//   duckduckgo_lite  -> https://lite.duckduckgo.com/lite/
+const http = require('http');
+const tls = require('tls');
+const { URL } = require('url');
 
 const UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
@@ -56,6 +51,22 @@ const ENDPOINTS = {
     const p = new URLSearchParams({ query: q });
     if (s) p.set('page', String(Math.floor(s / 10) + 1));
     return `https://www.startpage.com/sp/search?${p.toString()}`;
+  },
+  google: ({ q, s, gl, hl }) => {
+    const p = new URLSearchParams({
+      q,
+      hl: hl || 'en',
+      gl: gl || 'us',
+      start: String(s || 0),
+      pws: '0',
+      udm: '14',
+      gbv: '2',
+      nfpr: '1',
+      filter: '0',
+      ie: 'UTF-8',
+      oe: 'UTF-8',
+    });
+    return `https://www.google.com/search?${p.toString()}`;
   },
 };
 
@@ -143,6 +154,7 @@ const PARSERS = {
     hostRe: /startpage\.com$/i,
     titleRe: /<(?:h2|h3)[^>]*>\s*<a[^>]+href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
   }),
+  google: (html) => parseGoogleLite(html),
 };
 
 function hostOf(url) {
@@ -167,6 +179,66 @@ function parseAnchorBlocks(html, { hostRe, titleRe }) {
     if (!title || title.length < 2 || seen.has(url)) continue;
     seen.add(url);
     results.push({ title, url, snippet: '' });
+  }
+  return results;
+}
+
+function parseGoogleLite(html) {
+  const results = [];
+  const seen = new Set();
+  function resolveUrl(href) {
+    let url = decodeEntities(String(href || '').trim());
+    if (url.startsWith('/url?')) {
+      try {
+        const u = new URL(url, 'https://www.google.com');
+        url = u.searchParams.get('q') || u.searchParams.get('url') || url;
+      } catch {
+        /* ignore */
+      }
+    }
+    if (url.startsWith('/url?q=')) {
+      url = decodeEntities(url.slice('/url?q='.length).split('&')[0]);
+    }
+    try {
+      url = decodeURIComponent(url);
+    } catch {
+      /* ignore */
+    }
+    return url;
+  }
+  function skipHost(url) {
+    try {
+      const h = new URL(url).hostname;
+      return (
+        h === 'google.com' ||
+        h.endsWith('.google.com') ||
+        /googleusercontent\.com$|gstatic\.com$|googleadservices\.com$/i.test(h)
+      );
+    } catch {
+      return true;
+    }
+  }
+  const re =
+    /<h3[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>|<a[^>]+href="([^"]+)"[^>]*>[\s\S]*?<h3[^>]*>([\s\S]*?)<\/h3>/gi;
+  let m;
+  while ((m = re.exec(html))) {
+    const url = resolveUrl(m[1] || m[3] || '');
+    const title = decodeEntities(stripTags(m[2] || m[4] || ''));
+    if (!title || title.length < 3 || title.length > 200) continue;
+    if (!/^https?:\/\//i.test(url) || skipHost(url) || seen.has(url)) continue;
+    seen.add(url);
+    results.push({ title, url, snippet: '' });
+  }
+  if (results.length === 0) {
+    const re2 = /href="(\/url\?q=[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+    while ((m = re2.exec(html))) {
+      const url = resolveUrl(m[1]);
+      const title = decodeEntities(stripTags(m[2]));
+      if (!title || title.length < 3 || title.length > 200) continue;
+      if (!/^https?:\/\//i.test(url) || skipHost(url) || seen.has(url)) continue;
+      seen.add(url);
+      results.push({ title, url, snippet: '' });
+    }
   }
   return results;
 }
@@ -204,19 +276,149 @@ function isBlockedPage(html, engine) {
   const low = html.toLowerCase();
   if (/\banomaly/i.test(low)) return true;
   if (engine === 'duckduckgo' && /id="captcha"/i.test(low)) return true;
+  if (engine === 'google' && (/\/sorry\//i.test(html) || /id="captcha"/i.test(low))) return true;
   if (/unusual traffic|enablejs|prove you are human|verify you are human|protected by altcha|verification required/i.test(low)) return true;
   return false;
 }
 
+function fetchViaProxy(targetUrl, proxyUrl, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let finished = false;
+    const done = (err, val) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      if (err) reject(err);
+      else resolve(val);
+    };
+    let target;
+    let proxy;
+    try {
+      target = new URL(targetUrl);
+      proxy = new URL(proxyUrl);
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    const timer = setTimeout(() => {
+      req.destroy();
+      done(new Error('proxy fetch timeout'));
+    }, timeoutMs);
+    const headers = { Host: `${target.hostname}:443` };
+    if (proxy.username) {
+      const user = decodeURIComponent(proxy.username);
+      const pass = decodeURIComponent(proxy.password || '');
+      headers['Proxy-Authorization'] = `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
+    }
+    const req = http.request({
+      host: proxy.hostname,
+      port: Number(proxy.port) || 80,
+      method: 'CONNECT',
+      path: `${target.hostname}:443`,
+      headers,
+    });
+    req.on('connect', (res, socket) => {
+      if (res.statusCode !== 200) {
+        if (socket) socket.destroy();
+        done(new Error(`CONNECT ${res.statusCode}`));
+        return;
+      }
+      const tlsSock = tls.connect({ socket, servername: target.hostname, rejectUnauthorized: true }, () => {
+        const path = `${target.pathname}${target.search}`;
+        tlsSock.write(
+          `GET ${path} HTTP/1.1\r\nHost: ${target.hostname}\r\nUser-Agent: ${UA}\r\nAccept: text/html,application/xhtml+xml\r\nAccept-Language: en-US,en;q=0.9\r\nConnection: close\r\n\r\n`
+        );
+      });
+      const chunks = [];
+      tlsSock.on('data', (c) => chunks.push(c));
+      tlsSock.on('end', () => {
+        const raw = Buffer.concat(chunks).toString('utf8');
+        const sep = raw.indexOf('\r\n\r\n');
+        const header = sep >= 0 ? raw.slice(0, sep) : '';
+        let body = sep >= 0 ? raw.slice(sep + 4) : raw;
+        const status = parseInt((header.match(/^HTTP\/\d\.\d\s+(\d+)/) || [])[1], 10) || 0;
+        if (/^transfer-encoding:\s*chunked/im.test(header)) body = decodeChunked(body);
+        done(null, { status, html: body });
+      });
+      tlsSock.on('error', (err) => done(err));
+    });
+    req.on('error', (err) => done(err));
+    req.end();
+  });
+}
+
+function decodeChunked(body) {
+  let rest = body;
+  let out = '';
+  while (rest.length) {
+    const nl = rest.indexOf('\r\n');
+    if (nl < 0) break;
+    const size = parseInt(rest.slice(0, nl), 16);
+    if (!Number.isFinite(size) || size <= 0) break;
+    out += rest.slice(nl + 2, nl + 2 + size);
+    rest = rest.slice(nl + 2 + size);
+    if (rest.startsWith('\r\n')) rest = rest.slice(2);
+  }
+  return out || body;
+}
+
+function liveProxies() {
+  try {
+    const { getShardPool } = require('./proxyPool');
+    return getShardPool().filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function raceProxyFetch(url, engine, timeoutMs, n) {
+  const pool = liveProxies().sort(() => Math.random() - 0.5).slice(0, n);
+  if (!pool.length) return Promise.reject(new Error('no proxies'));
+  return new Promise((resolve, reject) => {
+    let pending = pool.length;
+    let finished = false;
+    let lastErr = null;
+    const done = (err, html) => {
+      if (finished) return;
+      if (html) {
+        finished = true;
+        resolve(html);
+        return;
+      }
+      lastErr = err || lastErr;
+      pending -= 1;
+      if (pending <= 0) reject(lastErr || new Error('all proxies failed'));
+    };
+    for (const p of pool) {
+      fetchViaProxy(url, p, timeoutMs)
+        .then(({ status, html }) => {
+          if (status >= 200 && status < 400 && html && !isBlockedPage(html, engine)) done(null, html);
+          else done(new Error(`status ${status}`));
+        })
+        .catch((err) => done(err));
+    }
+  });
+}
+
 async function fetchLitePage(url, engine) {
+  const headers = {
+    'user-agent': UA,
+    'accept-language': 'en-US,en;q=0.9',
+    accept: 'text/html,application/xhtml+xml',
+  };
+  if (engine === 'google') {
+    try {
+      return await raceProxyFetch(url, engine, 2200, 3);
+    } catch (err) {
+      const e = new Error(`Lite fetch failed: ${(err && err.message) || 'proxy race'}`);
+      e.code = (err && err.code) || 'LITE_FETCH_ERROR';
+      throw e;
+    }
+  }
   let resp;
   try {
     resp = await fetch(url, {
-      headers: {
-        'user-agent': UA,
-        'accept-language': 'en-US,en;q=0.9',
-        accept: 'text/html,application/xhtml+xml',
-      },
+      headers,
       redirect: 'follow',
       signal: AbortSignal.timeout(15000),
     });
@@ -239,7 +441,7 @@ async function fetchLitePage(url, engine) {
   return html;
 }
 
-async function fastLiteSearch({ engine, query, num = 20, hl = 'en', gl = 'us' }) {
+async function fastLiteSearch({ engine, query, num = 10, hl = 'en', gl = 'us', start = 0 }) {
   const build = ENDPOINTS[engine];
   if (!build) {
     const e = new Error(`No lite endpoint for engine "${engine}"`);
@@ -253,10 +455,11 @@ async function fastLiteSearch({ engine, query, num = 20, hl = 'en', gl = 'us' })
   const results = [];
   const seen = new Set();
   let lastErr = null;
+  const base = Math.max(0, Number(start) || 0);
 
   for (let i = 0; i < pageCount; i++) {
     if (results.length >= num) break;
-    const url = build({ q: query, kl, s: i * 10 || undefined, num, gl });
+    const url = build({ q: query, kl, s: base + i * 10, num, gl, hl });
     try {
       const html = await fetchLitePage(url, engine);
       let added = 0;

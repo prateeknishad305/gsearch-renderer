@@ -41,6 +41,7 @@ const crawlHandler = require('./api/crawl');
 const proxiesHandler = require('./api/proxies');
 const enginesHandler = require('./api/engines');
 const statsHandler = require('./api/stats');
+const serperHandler = require('./api/serper');
 
 const PORT = parseInt(process.env.PORT, 10) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -109,8 +110,16 @@ function readBody(req) {
   });
 }
 
-function route(pathname) {
+function route(pathname, method) {
   const path = pathname.replace(/\/+$/, '') || '/';
+  const m = String(method || 'GET').toUpperCase();
+  if (
+    (path === '/search' || path === '/api/serper' || path === '/serper' || path === '/api/google/search') &&
+    (m === 'POST' || m === 'PUT')
+  ) {
+    return serperHandler;
+  }
+  if (path === '/api/serper' || path === '/serper') return serperHandler;
   if (path === '/' || path === '/api/search' || path === '/search') return searchHandler;
   if (path === '/api/batch' || path === '/batch') return batchHandler;
   if (path === '/api/health' || path === '/health') return healthHandler;
@@ -126,13 +135,14 @@ async function handle(req, res) {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   req.query = parseQuery(url.searchParams);
 
-  const handler = route(url.pathname);
+  const handler = route(url.pathname, req.method);
   if (!handler) {
     res.status(404).json({
       success: false,
       error: 'Not found',
       usage: {
         search: 'GET /api/search?q=<query>&engine=<name>',
+        serper: 'POST /search  { "q": "<query>", "gl": "us", "hl": "en", "num": 10 }',
         batch: 'POST /api/batch',
         crawl: 'GET /api/crawl?url=<https://example.com>',
         proxies: 'GET|POST|DELETE /api/proxies',

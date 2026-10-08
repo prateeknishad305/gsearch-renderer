@@ -30,6 +30,8 @@ module.exports = async (req, res) => {
     features: {
       lite_fast: String(process.env.LITE_FAST || '1') !== '0',
       browser_reuse: String(process.env.BROWSER_REUSE || '1') !== '0',
+      serper_render: String(process.env.SERPER_RENDER || '0') === '1',
+      cache: true,
       engine_fallback: true,
       pagination: true,
       batch: true,
@@ -39,6 +41,9 @@ module.exports = async (req, res) => {
       merge: true,
       circuit: true,
       lite_engines: true,
+      google_fixes: require('./lib/google').FIXES.length,
+      google_udm: String(process.env.GOOGLE_UDM || '1') !== '0',
+      google_sticky: String(process.env.GOOGLE_STICKY || '1') !== '0',
     },
   });
 };

@@ -19,6 +19,10 @@ module.exports = async (req, res) => {
     success: true,
     stats: statsSnapshot(),
     circuit: circuitSnapshot(),
+    google_ip: require('./lib/googleIp').snapshot(),
+    google_session: require('./lib/googleSession').snapshot(),
+    google_lock: require('./lib/googleLock').stats(),
+    google_fixes: require('./lib/google').FIXES.length,
     pool: poolInfo(),
     browser: browserStats(),
   });

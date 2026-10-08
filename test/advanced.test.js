@@ -12,6 +12,17 @@ test('splitPool parses newline/comma lists and drops comments', () => {
   assert.deepStrictEqual(pool, ['http://a:1', 'http://b:2', 'http://c:3']);
 });
 
+test('empty PROXY_SERVER disables the pool', () => {
+  const { getProxyPool, poolInfo } = require('../api/lib/proxyPool');
+  const prev = process.env.PROXY_SERVER;
+  process.env.PROXY_SERVER = '';
+  assert.deepStrictEqual(getProxyPool(), []);
+  assert.equal(poolInfo().source, 'none');
+  assert.equal(poolInfo().proxies_available, 0);
+  if (prev === undefined) delete process.env.PROXY_SERVER;
+  else process.env.PROXY_SERVER = prev;
+});
+
 test('poolInfo reports proxies_available and hides fetcher URL', () => {
   const { poolInfo } = require('../api/lib/proxyPool');
   const info = poolInfo();
@@ -52,6 +63,16 @@ test('TtlCache returns values, expires, and refreshes LRU', () => {
   assert.strictEqual(cache.size, 2);
 });
 
+test('browserPool stats expose page pool fields', () => {
+  const { stats } = require('../api/lib/browserPool');
+  const s = stats();
+  assert.equal(typeof s.browserConnected, 'boolean');
+  assert.equal(typeof s.freePages, 'number');
+  assert.equal(typeof s.busyPages, 'number');
+  assert.equal(typeof s.workers, 'number');
+  assert.ok(s.workers >= 1);
+});
+
 test('TtlCache expires entries after ttl', async () => {
   const cache = new TtlCache({ ttlMs: 20, max: 5 });
   cache.set('x', 'y');
@@ -80,6 +101,41 @@ test('pageStep uses 10 for google and num for other engines', () => {
   assert.strictEqual(autoPageCount('yahoo', 25), 3);
 });
 
+test('takeGoogleProxy hands each host once then wraps', () => {
+  const { takeGoogleProxy, resetGoogleUsed, googleUsedCount, proxyIdentity } = require('../api/lib/proxyPool');
+  resetGoogleUsed();
+  const pool = ['http://a:8081', 'http://b:8081', 'http://c:8081'];
+  const got = new Set();
+  for (let i = 0; i < 3; i++) got.add(proxyIdentity(takeGoogleProxy(pool)));
+  assert.strictEqual(got.size, 3);
+  assert.strictEqual(googleUsedCount(), 3);
+  const wrap = takeGoogleProxy(pool);
+  assert.ok(pool.includes(wrap));
+  resetGoogleUsed();
+  assert.strictEqual(googleUsedCount(), 0);
+});
+
+test('takeStickyGoogleProxy reuses the same host for one query key', () => {
+  const {
+    takeStickyGoogleProxy,
+    peekStickyGoogleProxy,
+    setStickyGoogleProxy,
+    dropStickyGoogleProxy,
+    resetGoogleUsed,
+    proxyIdentity,
+  } = require('../api/lib/proxyPool');
+  resetGoogleUsed();
+  const pool = ['http://a:8081', 'http://b:8081', 'http://c:8081'];
+  const a = takeStickyGoogleProxy('g:hello|en|us', pool);
+  assert.equal(peekStickyGoogleProxy('g:hello|en|us'), null);
+  setStickyGoogleProxy('g:hello|en|us', a);
+  const b = takeStickyGoogleProxy('g:hello|en|us', pool);
+  assert.equal(proxyIdentity(a), proxyIdentity(b));
+  dropStickyGoogleProxy('g:hello|en|us');
+  assert.equal(peekStickyGoogleProxy('g:hello|en|us'), null);
+  resetGoogleUsed();
+});
+
 test('authOk is open when API_TOKEN unset and enforced when set', () => {
   const prev = process.env.API_TOKEN;
   delete process.env.API_TOKEN;
@@ -88,6 +144,7 @@ test('authOk is open when API_TOKEN unset and enforced when set', () => {
   process.env.API_TOKEN = 'sekret';
   assert.strictEqual(authOk({ headers: {}, query: { token: 'sekret' } }), true);
   assert.strictEqual(authOk({ headers: { authorization: 'Bearer sekret' }, query: {} }), true);
+  assert.strictEqual(authOk({ headers: { 'x-api-key': 'sekret' }, query: {} }), true);
   assert.strictEqual(authOk({ headers: { authorization: 'Bearer nope' }, query: {} }), false);
   assert.strictEqual(authOk({ headers: {}, query: {} }), false);
 

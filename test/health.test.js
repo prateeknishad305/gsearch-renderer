@@ -41,8 +41,13 @@ test('health is public even when API_TOKEN is set', async () => {
   assert.equal(res.body.features.user_proxies, true);
   assert.equal(res.body.features.merge, true);
   assert.equal(res.body.features.circuit, true);
+  assert.equal(res.body.features.cache, true);
   assert.equal(res.body.pool.fetcher.url, undefined);
   assert.equal(typeof res.body.pool.proxies_available, 'number');
+  assert.equal(typeof res.body.browser.browserConnected, 'boolean');
+  assert.equal(typeof res.body.browser.freePages, 'number');
+  assert.equal(typeof res.body.browser.busyPages, 'number');
+  assert.equal(typeof res.body.cache.hits, 'number');
   if (prev === undefined) delete process.env.API_TOKEN;
   else process.env.API_TOKEN = prev;
 });

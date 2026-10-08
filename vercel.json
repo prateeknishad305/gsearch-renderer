@@ -3,6 +3,8 @@
   "rewrites": [
     { "source": "/", "destination": "/api/search" },
     { "source": "/search", "destination": "/api/search" },
+    { "source": "/serper", "destination": "/api/serper" },
+    { "source": "/api/google/search", "destination": "/api/serper" },
     { "source": "/batch", "destination": "/api/batch" },
     { "source": "/crawl", "destination": "/api/crawl" },
     { "source": "/proxies", "destination": "/api/proxies" },

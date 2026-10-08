@@ -7,28 +7,25 @@
 function parseGoogle() {
   function resolveUrl(href) {
     let url = href;
-    if (href.startsWith('/url?q=')) {
+    if (href.startsWith('/url?')) {
       try {
         const u = new URL(href, 'https://www.google.com');
-        url = u.searchParams.get('q') || href;
+        url = u.searchParams.get('q') || u.searchParams.get('url') || href;
       } catch {
         /* ignore */
       }
     }
     return url;
   }
-  // "/goto?url=..." links carry a signed token (no plaintext destination) and
-  // resolve server-side via a 302. parseGoogle keeps them as-is and a Node-side
-  // step follows the redirect to recover the real URL. "/url?q=..." links are
-  // decoded immediately.
   const isGoogleRel = (href) => /^\/(?:goto|url)\?/.test(href);
   const NAV_TOKENS = new Set([
     'ai mode', 'all', 'images', 'videos', 'news', 'shopping', 'maps', 'books',
     'forums', 'more', 'tools', 'settings', 'privacy', 'sign in', 'sign out',
     'web result', 'search results', 'learn more', 'help', 'terms', 'about',
     'advertising', 'business', 'feedback', 'cookies', 'search settings',
-    'how search works', 'your data in search', 'see more',
-    'claim this knowledge panel', 'sign in to customize',
+    'how search works', 'your data in search', 'see more', 'skip to main content',
+    'accessibility help', 'web', 'shopping', 'claim this knowledge panel',
+    'sign in to customize', 'images', 'videos',
   ]);
   const isGoogleHost = (url) => {
     try {
@@ -38,52 +35,60 @@ function parseGoogle() {
       return false;
     }
   };
-  const region = document.querySelector('#search, #main, #rso') || document;
+  const region = document.querySelector('#search, #main, #rso, #center_col, #res') || document;
   const results = [];
   const seen = new Set();
-  // Site-link cards put several <h3> under ONE block that carries a single
-  // .VwiC3b. Only the first heading of such a card should take that snippet —
-  // the rest are deep links without their own description. Tracking snippet
-  // elements by identity (a DOM node is consumed once) handles any nesting.
   const usedSnippets = new WeakSet();
 
-  // Primary: heading nodes (h3 / aria-level=3), current and classic layouts.
-  for (const h of region.querySelectorAll('h3, [role="heading"][aria-level="3"]')) {
-    const title = (h.textContent || '').trim();
-    if (!title || title.length < 3 || NAV_TOKENS.has(title.toLowerCase())) continue;
-    const a = h.closest('a[href]') || (h.parentElement && h.parentElement.querySelector('a[href]'));
-    if (!a) continue;
-    const rawHref = a.getAttribute('href') || '';
-    const url = resolveUrl(rawHref);
-    if (!isGoogleRel(rawHref) && (!/^https?:\/\//i.test(url) || isGoogleHost(url))) continue;
-    const key = url || rawHref;
-    if (seen.has(key)) continue;
-    let snippet = '';
-    const container = h.closest('div.g, div[data-sncf], div[jscontroller], div[data-hveid], li') || a.parentElement;
-    if (container) {
-      const s = container.querySelector('div.VwiC3b, div[data-sncf], span.aCOpRe, div.MUxGbd, div[data-content-feature="1"]');
-      if (s && !usedSnippets.has(s)) {
-        snippet = (s.textContent || '').trim();
-        usedSnippets.add(s);
-      }
+  function snippetOf(node, a) {
+    const container =
+      (node && node.closest('div.g, div.MjjYud, div.yuRUbf, div[data-sncf], div[jscontroller], div[data-hveid], li, div[data-sokoban-container]')) ||
+      (a && a.parentElement);
+    if (!container) return '';
+    const s = container.querySelector(
+      'div.VwiC3b, div[data-sncf], span.aCOpRe, div.MUxGbd, div[data-content-feature="1"], div.IsZvec, span.st, .lEBKkf'
+    );
+    if (s && !usedSnippets.has(s)) {
+      usedSnippets.add(s);
+      return (s.textContent || '').trim();
     }
-    seen.add(key);
-    results.push({ title, url, snippet });
+    return '';
   }
 
-  // Fallback: layouts that render titles without h3/role=heading (new UI).
+  function push(title, rawHref, node, a) {
+    const url = resolveUrl(rawHref);
+    if (!isGoogleRel(rawHref) && (!/^https?:\/\//i.test(url) || isGoogleHost(url))) return;
+    const key = url || rawHref;
+    if (!title || title.length < 3 || NAV_TOKENS.has(title.toLowerCase()) || seen.has(key)) return;
+    seen.add(key);
+    results.push({ title, url: isGoogleRel(rawHref) ? rawHref : url, snippet: snippetOf(node, a) });
+  }
+
+  for (const h of region.querySelectorAll('h3, [role="heading"][aria-level="3"]')) {
+    const title = (h.textContent || '').trim();
+    const a = h.closest('a[href]') || (h.parentElement && h.parentElement.querySelector('a[href]'));
+    if (!a) continue;
+    push(title, a.getAttribute('href') || '', h, a);
+  }
+
   if (results.length === 0) {
-    for (const a of region.querySelectorAll('a[href]')) {
-      const rawHref = a.getAttribute('href') || '';
-      const url = resolveUrl(rawHref);
-      if (!isGoogleRel(rawHref) && (!/^https?:\/\//i.test(url) || isGoogleHost(url))) continue;
-      const key = url || rawHref;
-      if (seen.has(key)) continue;
-      const title = (a.textContent || '').trim();
-      if (!title || title.length < 3 || title.length > 200 || NAV_TOKENS.has(title.toLowerCase())) continue;
+    for (const a of region.querySelectorAll('div.yuRUbf a[href], div.g a[href], a[data-ved][href], cite')) {
+      const link = a.tagName === 'CITE' ? a.closest('a[href]') || (a.parentElement && a.parentElement.querySelector('a[href]')) : a;
+      if (!link) continue;
+      const rawHref = link.getAttribute('href') || '';
+      const titleEl = link.querySelector('h3, [role="heading"]') || link;
+      const title = (titleEl.textContent || '').trim();
+      push(title, rawHref, link, link);
+    }
+  }
+
+  if (results.length === 0) {
+    for (const a of region.querySelectorAll('a[href^="/url?"], a[href^="/goto?"], a[href^="http"]')) {
       if (a.closest('nav, header, form, [role="navigation"], [role="banner"]')) continue;
-      seen.add(key);
-      results.push({ title, url, snippet: '' });
+      const rawHref = a.getAttribute('href') || '';
+      const title = (a.textContent || '').trim();
+      if (title.length > 200) continue;
+      push(title, rawHref, a, a);
     }
   }
   return results;
@@ -485,21 +490,15 @@ function parseSeznam() {
 
 const ENGINES = {
   google: {
-    url: ({ q, num, start, hl, gl }) => {
-      const p = new URLSearchParams({ q, start: String(start || 0), hl, gl });
-      const n = Math.min(10, Math.max(1, Number(num) || 10));
-      if (n !== 10) p.set('num', String(n));
-      return `https://www.google.com/search?${p.toString()}`;
+    url: ({ q, num, start, hl, gl, proxy }) => {
+      const g = require('./google');
+      return g.buildSearchUrl({ q, num, start, hl, gl, proxy });
     },
-    cookies: () => {
-      const stamp = Date.now().toString(36);
-      return [
-        { name: 'CONSENT', value: `YES+cb.20210328-17-p0.en+FX+${stamp}`, domain: '.google.com', path: '/' },
-        // SOCS=CAI opts out of the EU consent wall in a Google-issued format.
-        { name: 'SOCS', value: 'CAI', domain: '.google.com', path: '/' },
-      ];
+    cookies: ({ sticky } = {}) => {
+      const g = require('./google');
+      return g.cookiesFor({ sticky });
     },
-    ready: 'h3',
+    ready: 'h3, #search, #rso',
     scroll: 0,
     parse: parseGoogle,
   },
@@ -663,7 +662,6 @@ function detectBlock(engine) {
     'access denied',
     'you do not have permission',
     '403 - forbidden',
-    'enablejs',
     'prove you are human',
     'verify you are human',
     'request has been blocked',
@@ -702,6 +700,7 @@ function detectBlock(engine) {
       'email us',
       'persists',
       'forbidden',
+      'enablejs',
     ];
     for (const phrase of MEDIUM) {
       if (low.includes(phrase)) return `${store} served a challenge/consent/block page ("${phrase}").`;

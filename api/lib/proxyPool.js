@@ -8,14 +8,30 @@ function intEnv(name, dflt) {
   return Number.isFinite(v) && v > 0 ? v : dflt;
 }
 
+const SOCKS_PORTS = new Set(['1080', '1081', '1082', '9050', '9051']);
+
+function schemeForPort(port) {
+  return SOCKS_PORTS.has(String(port)) ? 'socks5' : 'http';
+}
+
 function normalizeProxy(s) {
   const line = String(s || '').trim();
   if (!line || line.startsWith('#')) return null;
-  if (/^https?:\/\//i.test(line)) return line;
-  if (/^[^/@:\s]+:\d+$/.test(line)) return `http://${line}`;
+  if (/^(https?|socks5h?|socks4a?):\/\//i.test(line)) return line;
+  if (/^[^/@:\s]+:\d+$/.test(line)) {
+    const port = line.slice(line.lastIndexOf(':') + 1);
+    return `${schemeForPort(port)}://${line}`;
+  }
   const m = line.match(/^([^/@:\s]+):(\d+):([^:\s]+):(.+)$/);
   if (!m) return null;
-  return `http://${encodeURIComponent(m[3])}:${encodeURIComponent(m[4])}@${m[1]}:${m[2]}`;
+  return `${schemeForPort(m[2])}://${encodeURIComponent(m[3])}:${encodeURIComponent(m[4])}@${m[1]}:${m[2]}`;
+}
+
+function altProxy(proxy) {
+  const p = String(proxy || '');
+  if (/^socks5h?:\/\//i.test(p)) return p.replace(/^socks5h?:/i, 'http:');
+  if (/^https?:\/\//i.test(p)) return p.replace(/^https?:/i, 'socks5:');
+  return null;
 }
 
 // Reads a newline/comma separated list of proxy URLs. Lines may be "# comment"-
@@ -81,6 +97,10 @@ function clearUserProxies() {
 
 function getProxyPool() {
   if (userPool.length) return userPool.slice();
+  if (process.env.PROXY_SERVER !== undefined) {
+    const one = String(process.env.PROXY_SERVER || '').trim();
+    return one ? splitPool(one) : [];
+  }
   const envPool = String(process.env.PROXY_POOL || '').trim();
   if (envPool) return splitPool(envPool);
   try {
@@ -105,6 +125,76 @@ function getShardPool() {
   return shard.length ? shard : pool;
 }
 
+const googleUsed = new Set();
+const googleSticky = new Map();
+const STICKY_TTL_MS = 5 * 60 * 1000;
+
+function proxyIdentity(p) {
+  if (!p) return 'direct';
+  try {
+    const u = new URL(p);
+    return `${u.hostname}:${u.port || (u.protocol === 'https:' ? '443' : '80')}`;
+  } catch {
+    return String(p);
+  }
+}
+
+function takeGoogleProxy(pool, exclude) {
+  const skip = exclude instanceof Set ? exclude : new Set();
+  const list = (Array.isArray(pool) ? pool : []).filter(Boolean);
+  if (!list.length) return null;
+  let unused = list.filter((p) => {
+    const id = proxyIdentity(p);
+    return !googleUsed.has(id) && !skip.has(id);
+  });
+  if (!unused.length) {
+    unused = list.filter((p) => !skip.has(proxyIdentity(p)));
+    if (!unused.length) {
+      googleUsed.clear();
+      unused = list.slice();
+    }
+  }
+  if (!unused.length) return null;
+  const pick = unused[Math.floor(Math.random() * unused.length)];
+  googleUsed.add(proxyIdentity(pick));
+  return pick;
+}
+
+function peekStickyGoogleProxy(key) {
+  const k = String(key || '');
+  if (!k) return null;
+  const hit = googleSticky.get(k);
+  if (hit && Date.now() - hit.at < STICKY_TTL_MS) return hit.proxy;
+  if (hit) googleSticky.delete(k);
+  return null;
+}
+
+function takeStickyGoogleProxy(key, pool) {
+  const peek = peekStickyGoogleProxy(key);
+  if (peek) return peek;
+  return takeGoogleProxy(pool);
+}
+
+function setStickyGoogleProxy(key, proxy) {
+  const k = String(key || '');
+  if (!k || !proxy) return;
+  googleSticky.set(k, { proxy, at: Date.now() });
+}
+
+function dropStickyGoogleProxy(key) {
+  const k = String(key || '');
+  if (k) googleSticky.delete(k);
+}
+
+function googleUsedCount() {
+  return googleUsed.size;
+}
+
+function resetGoogleUsed() {
+  googleUsed.clear();
+  googleSticky.clear();
+}
+
 function poolInfo() {
   const pool = getProxyPool();
   const shard = getShardPool();
@@ -124,6 +214,7 @@ function poolInfo() {
   }
   let source = 'none';
   if (userPool.length) source = 'user';
+  else if (process.env.PROXY_SERVER !== undefined) source = String(process.env.PROXY_SERVER || '').trim() ? 'env' : 'none';
   else if (String(process.env.PROXY_POOL || '').trim()) source = 'env';
   else if (fetcher && fetcher.alive) source = 'live';
   else if (filePool().length) source = 'file';
@@ -150,4 +241,14 @@ module.exports = {
   setUserProxies,
   clearUserProxies,
   MAX_USER_PROXIES,
+  altProxy,
+  SOCKS_PORTS,
+  proxyIdentity,
+  takeGoogleProxy,
+  takeStickyGoogleProxy,
+  peekStickyGoogleProxy,
+  setStickyGoogleProxy,
+  dropStickyGoogleProxy,
+  googleUsedCount,
+  resetGoogleUsed,
 };

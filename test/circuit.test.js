@@ -27,8 +27,22 @@ test('lite parsers extract organic urls from sample html', () => {
 });
 
 test('lite endpoints exist for extra engines', () => {
-  for (const name of ['bing', 'brave', 'mojeek', 'yahoo', 'ecosia', 'startpage', 'duckduckgo', 'duckduckgo_lite']) {
+  for (const name of ['bing', 'brave', 'mojeek', 'yahoo', 'ecosia', 'startpage', 'duckduckgo', 'duckduckgo_lite', 'google']) {
     assert.equal(typeof ENDPOINTS[name], 'function', name);
   }
-  assert.equal(typeof ENDPOINTS.google, 'undefined');
+});
+
+test('google lite parser reads h3/url?q=', () => {
+  const html =
+    '<h3 class="r"><a href="/url?q=https://en.wikipedia.org/wiki/Hello_world&amp;sa=U">Hello world</a></h3>' +
+    '<a href="/url?q=https://www.google.com/search"><h3>Skip me</h3></a>';
+  const out = PARSERS.google(html);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].url, 'https://en.wikipedia.org/wiki/Hello_world');
+  assert.equal(out[0].title, 'Hello world');
+  const u = ENDPOINTS.google({ q: 'hello world', s: 10, gl: 'us', hl: 'en' });
+  const p = new URL(u).searchParams;
+  assert.equal(p.get('gbv'), '2');
+  assert.equal(p.get('start'), '10');
+  assert.equal(p.get('udm'), '14');
 });

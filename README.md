@@ -19,7 +19,7 @@ gsearch-api scrapes search engines with plain HTTP. Some engines (Google, DuckDu
 | `q`       | required | Search query |
 | `engine`  | `google` | Single engine (back-compat) |
 | `engines` | *(none)* | Comma list tried in order; first engine that returns results wins (e.g. `google,bing`). Takes precedence over `engine`. |
-| `num`     | `20`     | Target unique results (max `100`). Google and Yahoo cap desktop SERPs at **~10 results per page** (`&num=100` is gone / ignored), so extra pages (`start=0,10,20,...`) are fetched until `num` unique URLs. Bing and others still take a higher per-page count. |
+| `num`     | `10`     | Target unique results (max `100`). Google and Yahoo cap desktop SERPs at **~10 results per page** (`&num=100` is gone / ignored), so extra pages (`start=0,10,20,...`) are fetched until `num` unique URLs. Bing and others still take a higher per-page count. |
 | `pages`   | auto     | SERP pages to merge (max `10`). Omit to fetch `ceil(num/10)` pages for Google/Yahoo (stops early once `num` unique URLs). Other engines: 1 page. |
 | `start`   | `0`      | Pagination offset |
 | `hl`      | `en`     | Interface language |
@@ -31,7 +31,11 @@ gsearch-api scrapes search engines with plain HTTP. Some engines (Google, DuckDu
 
 Engines: `google`, `bing`, `brave`, `mojeek`, `startpage`, `yahoo`, `duckduckgo`, `duckduckgo_lite`, `qwant`, `ecosia`, `swisscows`, `seznam`.
 
-`engines=google,bing` tries in order (fallback). `mode=merge` runs them in parallel and unions unique URLs. `engines=*` / `engines=all` tries every engine. Lite HTTP is used first for engines that serve static SERP HTML (DDG, Bing, Brave, Yahoo, Mojeek, Ecosia, Startpage); Chromium is the fallback.
+`engines=google,bing` tries in order (fallback). `mode=merge` runs them in parallel and unions unique URLs. `engines=*` / `engines=all` tries every engine. Lite HTTP is used first for engines that serve static SERP HTML (Google `gbv=2`, DDG, Bing, Brave, Yahoo, Mojeek, Ecosia, Startpage); Chromium is the fallback.
+
+### `POST /search` (also `POST /api/serper`)
+
+serper.dev drop-in. JSON `{ "q", "gl", "hl", "num", "page" }` returns `{ searchParameters, organic[{title,link,snippet,position}], credits }`. Google-only. Lite HTTP first; Chromium only when `SERPER_RENDER=1`. Auth: `X-API-KEY`, `Authorization: Bearer`, or `?token=` when `API_TOKEN` is set. Duplicate queries hit the in-memory TTL cache (`cached: true`). No Redis.
 
 ### `POST /api/batch`
 
@@ -71,7 +75,7 @@ POST JSON is also accepted: `{ "url": "https://example.com", "max_pages": 3, "ma
 ### `GET /api/health`
 
 Cheap introspection for a load balancer / the operator: `pool` (`proxies_available`, shard config; fetcher URL is never returned),
-`browser` (reuse + active/queued contexts), `cache` stats, `engines`, `features`.
+`browser` (`browserConnected`, `freePages`, `busyPages`, reuse + active/queued contexts), `cache` stats, `engines`, `features`.
 
 ### `GET|POST|DELETE /api/proxies`
 
@@ -117,12 +121,22 @@ interstitial), retries with another member before falling back to a direct reque
 
 | Env var             | Default | Description |
 |---------------------|---------|-------------|
-| `BROWSER_REUSE`     | `1`     | Reuse a long-lived Chromium per process (big win on containers; a no-op on Vercel where browsers are reaped). `0` = one browser per request. |
+| `BROWSER_REUSE`     | `1`     | Reuse a long-lived Chromium + page pool per process (big win on containers; a no-op on Vercel where browsers are reaped). `0` = one browser per request. |
 | `BROWSER_IDLE_MS`   | `120000`| Close an idle pooled browser after this long |
 | `MAX_CONTEXTS`      | `4`     | Max concurrent tabs per instance (bounds memory) |
-| `CACHE_TTL_MS`      | `300000`| Results cache TTL (`0` disables) |
+| `BROWSER_WORKERS`   | `MAX_CONTEXTS` | Size of the reusable page pool |
+| `MAX_RETRIES`       | *(unset)* | Extra proxy attempts after the first (`0` = one try) |
+| `NAVIGATION_TIMEOUT`| *(unset)* | Alias for `GOOGLE_NAV_MS` (page.goto timeout) |
+| `RESULT_TIMEOUT`    | *(unset)* | Alias for `GOOGLE_READY_MS` (wait-for-h3) |
+| `REQUEST_TIMEOUT`   | *(unset)* | Alias for `PROXY_WINDOW_MS` (per-page budget) |
+| `PROXY_SERVER`      | *(unset)* | Single proxy URL. Empty string disables the pool (direct). |
+| `CACHE_TTL_MS`      | `300000`| In-memory results cache TTL (`0` disables). No Redis. |
 | `CACHE_MAX`         | `500`   | Max cached queries |
-| `LITE_FAST`         | `1`     | Plain-HTTP fast path for DuckDuckGo engines (`0` disables) |
+| `SERPER_RENDER`     | `0`     | `POST /search` Chromium fallback. Default lite HTTP only. |
+| `GOOGLE_JITTER_MS`  | `0`     | Random pre-nav delay for Google Chromium (0 = off) |
+| `GOOGLE_NAV_MS`     | `12000` | Google Chromium navigation timeout |
+| `GOOGLE_READY_MS`   | `8000`  | Google wait-for-h3 timeout |
+| `LITE_FAST`         | `1`     | Plain-HTTP fast path (Google `gbv=2` plus DDG/Bing/etc). `0` disables |
 | `BATCH_MAX`         | `6`     | Max queries per `POST /api/batch` |
 | `BATCH_BUDGET_MS`   | `50000` | Batch wall-clock budget |
 | `CRAWL_BUDGET_MS`   | `50000` | Crawl wall-clock budget |

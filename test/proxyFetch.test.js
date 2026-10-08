@@ -56,3 +56,10 @@ test('splitPool still parses live-list host:port:user:pass rows', () => {
   assert.equal(pool.length, 1);
   assert.match(pool[0], /^http:\/\/u:p%3D%3D@10\.0\.0\.1:8081$/);
 });
+
+test('port 1082 is stored as socks5', () => {
+  const pool = splitPool('residential.example.com:1082:user+country=de:secret');
+  assert.equal(pool.length, 1);
+  assert.match(pool[0], /^socks5:\/\//);
+  assert.match(pool[0], /residential\.example\.com:1082/);
+});

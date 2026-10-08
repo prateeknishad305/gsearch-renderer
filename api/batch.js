@@ -61,7 +61,7 @@ module.exports = async (req, res) => {
     return send(res, { error: `Unknown engine(s) "${unknown.join(', ')}". Available: ${names().join(', ')}`, http_status: 400 });
   }
 
-  const num = Math.min(Math.max(1, Number(body.num) || 20), 100);
+  const num = Math.min(Math.max(1, Number(body.num) || 10), 100);
   const pagesGiven = body.pages !== undefined && body.pages !== '';
   const autoPages = !pagesGiven;
   const pages = pagesGiven
@@ -94,7 +94,7 @@ module.exports = async (req, res) => {
     let lastErr = new Error('no engine produced a result');
     for (const engine of engineList) {
       try {
-        const r = await searchEngine({ engine, query, num, pages, start: 0, hl, gl, autoPages });
+        const r = await searchEngine({ engine, query, num, pages, start: 0, hl, gl, autoPages, proxyless: !!body.proxyless });
         settled = r;
         const item = {
           query,

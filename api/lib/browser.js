@@ -30,8 +30,9 @@ async function launchBrowser({ disableHttp2 = false } = {}) {
   const launch = await resolveLaunch();
   const pw = loadPlaywright();
   const extra = disableHttp2 ? ['--disable-http2'] : [];
+  const g = require('./google');
   return pw.launch({
-    args: [...launch.args, ...STEALTH_ARGS, ...extra],
+    args: [...launch.args, ...STEALTH_ARGS, ...g.chromiumArgs(), ...extra],
     executablePath: launch.executablePath,
     headless: true,
     ignoreDefaultArgs: ['--enable-automation'],

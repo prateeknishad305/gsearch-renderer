@@ -2,6 +2,8 @@
 
 const fs = require('fs');
 
+const { chromiumArgs } = require('./google');
+
 const SYSTEM_ARGS = [
   '--no-sandbox',
   '--disable-setuid-sandbox',
@@ -12,6 +14,7 @@ const SYSTEM_ARGS = [
   '--hide-scrollbars',
   '--disable-extensions',
   '--no-first-run',
+  ...chromiumArgs(),
 ];
 
 const SYSTEM_CANDIDATES = [

@@ -19,7 +19,8 @@ function authOk(req) {
   if (!token) return true;
   const header = String(req.headers['authorization'] || '');
   const query = String((req.query && req.query.token) || '');
-  return header === `Bearer ${token}` || query === token;
+  const apiKey = String(req.headers['x-api-key'] || '');
+  return header === `Bearer ${token}` || query === token || apiKey === token;
 }
 
 function unauthorized(res) {
