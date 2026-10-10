@@ -29,7 +29,7 @@ gsearch-api scrapes search engines with plain HTTP. Some engines (Google, DuckDu
 | `debug`   | `0`      | Set to `1` to skip the lite path/cache and include `debug_html` |
 | `token`   | *(none)* | API token when `API_TOKEN` is set on the deployment |
 
-Engines: `google`, `bing`, `brave`, `mojeek`, `startpage`, `yahoo`, `duckduckgo`, `duckduckgo_lite`, `qwant`, `ecosia`, `swisscows`, `seznam`.
+Engines: `google`, `bing`, `brave`, `mojeek`, `startpage`, `yahoo`, `duckduckgo`, `duckduckgo_lite`, `qwant`, `ecosia`, `swisscows`, `seznam`, `yandex`, `shodan`, `marginalia`, `wiby`, `github`, `wikipedia`, `archive`. `shodan` scrapes public `shodan.io/search` HTML (no API key). `github` / `wikipedia` / `archive` keep same-host result URLs.
 
 `engines=google,bing` tries in order (fallback). `mode=merge` runs them in parallel and unions unique URLs. `engines=*` / `engines=all` tries every engine. Lite HTTP is used first for engines that serve static SERP HTML (Google `gbv=2`, DDG, Bing, Brave, Yahoo, Mojeek, Ecosia, Startpage); Chromium is the fallback.
 

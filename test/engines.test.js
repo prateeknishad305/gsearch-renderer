@@ -6,7 +6,7 @@ const { ENGINES, names } = require('../api/lib/engines');
 
 test('supports the expected engines', () => {
   const n = names();
-  for (const e of ['google', 'bing', 'brave', 'mojeek', 'startpage', 'yahoo', 'duckduckgo', 'duckduckgo_lite', 'qwant', 'ecosia', 'swisscows', 'seznam']) {
+  for (const e of ['google', 'bing', 'brave', 'mojeek', 'startpage', 'yahoo', 'duckduckgo', 'duckduckgo_lite', 'qwant', 'ecosia', 'swisscows', 'seznam', 'yandex', 'shodan', 'marginalia', 'wiby', 'github', 'wikipedia', 'archive']) {
     assert.ok(n.includes(e), `missing engine ${e}`);
   }
 });
@@ -103,4 +103,45 @@ test('swisscows and seznam URLs paginate', () => {
   assert.equal(s2.searchParams.get('offset'), '10');
   const z2 = new URL(ENGINES.seznam.url({ q: 'x', start: 10 }));
   assert.equal(z2.searchParams.get('from'), '10');
+});
+
+test('yandex URL uses text and paginates with p', () => {
+  const u0 = ENGINES.yandex.url({ q: 'google.com', start: 0 });
+  assert.match(u0, /yandex\.com\/search/);
+  const p0 = new URL(u0).searchParams;
+  assert.equal(p0.get('text'), 'google.com');
+  assert.equal(p0.get('p'), null);
+  const u2 = ENGINES.yandex.url({ q: 'google.com', start: 10 });
+  assert.equal(new URL(u2).searchParams.get('p'), '1');
+});
+
+test('shodan URL uses query and paginates with page', () => {
+  const u0 = ENGINES.shodan.url({ q: 'google.com', start: 0 });
+  assert.match(u0, /shodan\.io\/search/);
+  const p0 = new URL(u0).searchParams;
+  assert.equal(p0.get('query'), 'google.com');
+  assert.equal(p0.get('page'), null);
+  const u2 = ENGINES.shodan.url({ q: 'google.com', start: 10 });
+  assert.equal(new URL(u2).searchParams.get('page'), '2');
+});
+
+test('marginalia wiby github wikipedia archive URLs', () => {
+  const m = new URL(ENGINES.marginalia.url({ q: 'google.com', start: 10 }));
+  assert.match(m.href, /marginalia\.nu\/search/);
+  assert.equal(m.searchParams.get('query'), 'google.com');
+  assert.equal(m.searchParams.get('first'), '11');
+  const w = new URL(ENGINES.wiby.url({ q: 'google.com', start: 0 }));
+  assert.match(w.href, /wiby\.me/);
+  assert.equal(w.searchParams.get('q'), 'google.com');
+  const g = new URL(ENGINES.github.url({ q: 'language', start: 10 }));
+  assert.match(g.href, /github\.com\/search/);
+  assert.equal(g.searchParams.get('type'), 'repositories');
+  assert.equal(g.searchParams.get('p'), '2');
+  const wiki = new URL(ENGINES.wikipedia.url({ q: 'google.com', start: 10, hl: 'en' }));
+  assert.match(wiki.href, /en\.wikipedia\.org/);
+  assert.equal(wiki.searchParams.get('search'), 'google.com');
+  assert.equal(wiki.searchParams.get('offset'), '10');
+  const a = new URL(ENGINES.archive.url({ q: 'google.com', start: 10 }));
+  assert.match(a.href, /archive\.org\/search/);
+  assert.equal(a.searchParams.get('page'), '2');
 });

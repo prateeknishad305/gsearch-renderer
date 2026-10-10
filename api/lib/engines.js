@@ -488,6 +488,283 @@ function parseSeznam() {
   return results;
 }
 
+function parseYandex() {
+  function isYandexHost(url) {
+    try {
+      const h = new URL(url).hostname;
+      return (
+        h === 'yandex.com' ||
+        h === 'yandex.ru' ||
+        h === 'ya.ru' ||
+        h.endsWith('.yandex.com') ||
+        h.endsWith('.yandex.ru') ||
+        h.endsWith('.yandex.net') ||
+        h.endsWith('.yandex.by') ||
+        h.endsWith('.yandex.kz') ||
+        h.endsWith('.ya.ru')
+      );
+    } catch {
+      return true;
+    }
+  }
+  function push(results, seen, title, url, snippet) {
+    if (!/^https?:\/\//i.test(url) || isYandexHost(url) || seen.has(url)) return;
+    const t = String(title || '').replace(/\s+/g, ' ').trim();
+    if (!t || t.length < 2) return;
+    seen.add(url);
+    results.push({ title: t, url, snippet: String(snippet || '').replace(/\s+/g, ' ').trim() });
+  }
+  const results = [];
+  const seen = new Set();
+  document.querySelectorAll('li.serp-item, .serp-item, .Organic, .organic, [data-fast-name="organic"]').forEach((el) => {
+    const a = el.querySelector(
+      'a.organic__url, a.OrganicTitle-Link, .organic__title-wrapper a, h2 a, a.Link[href^="http"]'
+    );
+    if (!a) return;
+    let url = a.getAttribute('href') || '';
+    if (isYandexHost(url)) {
+      const cite = el.querySelector('cite, .organic__path, .Path, b.organic__greenurl, .Organic-Path, .Path-Item');
+      const raw = ((cite && cite.textContent) || '').replace(/\s+/g, ' ').trim();
+      const host = (raw.match(/([a-z0-9-]+(?:\.[a-z0-9-]+)+)/i) || [])[1];
+      if (host) url = 'https://' + host.replace(/\/+$/, '');
+    }
+    const titleEl = el.querySelector('.organic__title, .OrganicTitleContentSpan, h2, a.organic__url');
+    const title = (titleEl && titleEl.textContent) || a.textContent;
+    const s = el.querySelector('.organic__text, .OrganicText, .text-container, .organic__content-wrapper, .Organic-ContentWrapper');
+    push(results, seen, title, url, s ? s.textContent : '');
+  });
+  if (results.length === 0) {
+    document.querySelectorAll('a.organic__url[href], a.OrganicTitle-Link[href]').forEach((a) => {
+      const wrap = a.closest('li, .serp-item, .Organic, .organic') || a.parentElement;
+      const s = wrap && wrap.querySelector('.organic__text, .OrganicText, p');
+      push(results, seen, a.textContent, a.getAttribute('href') || '', s ? s.textContent : '');
+    });
+  }
+  return results;
+}
+
+function parseShodan() {
+  function hostHref(href) {
+    const m = String(href || '').match(/\/host\/([^/?#]+)/);
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+  function asUrl(value) {
+    const v = String(value || '').trim();
+    if (!v) return '';
+    if (/^https?:\/\//i.test(v)) return v;
+    if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(v) || v.includes(':')) return `http://${v}`;
+    if (/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(v)) return `https://${v}`;
+    return '';
+  }
+  const results = [];
+  const seen = new Set();
+  function push(title, url, snippet) {
+    const t = String(title || '').replace(/\s+/g, ' ').trim();
+    const u = asUrl(url);
+    if (!t || t.length < 2 || !u || seen.has(u)) return;
+    seen.add(u);
+    results.push({ title: t, url: u, snippet: String(snippet || '').replace(/\s+/g, ' ').trim() });
+  }
+  const cards = document.querySelectorAll(
+    '.result, .search-result, #results .card, div[data-id], a[href*="/host/"]'
+  );
+  cards.forEach((el) => {
+    const a = el.tagName === 'A' ? el : el.querySelector('a[href*="/host/"]');
+    if (!a) return;
+    const href = a.getAttribute('href') || '';
+    const ip = hostHref(href) || (a.textContent || '').trim();
+    const wrap = (el.tagName === 'A' ? a.closest('.result, .search-result, .card, div') : el) || a.parentElement;
+    const hostText = wrap
+      ? Array.from(wrap.querySelectorAll('.hostnames li, .hostname, ul.hostnames li, a.host'))
+          .map((n) => (n.textContent || '').trim())
+          .filter((s) => s && s.includes('.'))[0] || ''
+      : '';
+    const ports = wrap
+      ? Array.from(wrap.querySelectorAll('.ports li, a.port, .port, span.port'))
+          .map((n) => (n.textContent || '').trim())
+          .filter((s) => /^\d+$/.test(s))
+          .slice(0, 12)
+          .join(', ')
+      : '';
+    const extra = wrap
+      ? Array.from(wrap.querySelectorAll('.org, .isp, .city, .country, .details, p'))
+          .map((n) => (n.textContent || '').replace(/\s+/g, ' ').trim())
+          .filter((s) => s && s.length < 160)
+          .slice(0, 2)
+          .join(' · ')
+      : '';
+    const title = hostText || ip;
+    const url = hostText || ip;
+    const snippet = [ip && ip !== title ? ip : '', ports ? `ports ${ports}` : '', extra].filter(Boolean).join(' · ');
+    push(title, url, snippet);
+  });
+  return results;
+}
+
+function parseMarginalia() {
+  function isOwn(url) {
+    try {
+      const h = new URL(url).hostname;
+      return h === 'marginalia.nu' || h.endsWith('.marginalia.nu');
+    } catch {
+      return true;
+    }
+  }
+  const results = [];
+  const seen = new Set();
+  function push(title, url, snippet) {
+    if (!/^https?:\/\//i.test(url) || isOwn(url) || seen.has(url)) return;
+    const t = String(title || '').replace(/\s+/g, ' ').trim();
+    if (!t || t.length < 2) return;
+    seen.add(url);
+    results.push({ title: t, url, snippet: String(snippet || '').replace(/\s+/g, ' ').trim() });
+  }
+  document.querySelectorAll('section, article, .card, li, .result, main a[href^="http"]').forEach((el) => {
+    const a = el.tagName === 'A' ? el : el.querySelector('a[href^="http"]');
+    if (!a) return;
+    const url = a.getAttribute('href') || '';
+    const titleEl = el.querySelector && el.querySelector('h2, h3, .title');
+    const title = (titleEl && titleEl.textContent) || a.textContent;
+    const s = el.querySelector && el.querySelector('p, .description, .snippet');
+    push(title, url, s ? s.textContent : '');
+  });
+  return results;
+}
+
+function parseWiby() {
+  function isOwn(url) {
+    try {
+      const h = new URL(url).hostname;
+      return h === 'wiby.me' || h.endsWith('.wiby.me');
+    } catch {
+      return true;
+    }
+  }
+  const results = [];
+  const seen = new Set();
+  document.querySelectorAll('a[href^="http"]').forEach((a) => {
+    if (a.closest('nav, header, footer, [role="navigation"]')) return;
+    const url = a.getAttribute('href') || '';
+    if (!/^https?:\/\//i.test(url) || isOwn(url) || seen.has(url)) return;
+    const title = (a.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!title || title.length < 2) return;
+    const wrap = a.closest('p, li, div, tr') || a.parentElement;
+    const s = wrap && wrap.querySelector('font, small, p, span');
+    seen.add(url);
+    results.push({ title, url, snippet: s ? (s.textContent || '').replace(/\s+/g, ' ').trim() : '' });
+  });
+  return results;
+}
+
+function parseGithub() {
+  const SKIP = new Set([
+    'search', 'login', 'signup', 'topics', 'orgs', 'settings', 'marketplace',
+    'explore', 'about', 'pricing', 'features', 'collections', 'sponsors',
+    'notifications', 'pulls', 'issues', 'codespaces', 'copilot', 'customer-stories',
+    'security', 'enterprise', 'team', 'solutions', 'resources', 'open-source',
+  ]);
+  function repoUrl(href) {
+    try {
+      const u = /^https?:\/\//i.test(href) ? new URL(href) : new URL(href, 'https://github.com');
+      if (u.hostname !== 'github.com' && u.hostname !== 'www.github.com') return '';
+      const parts = u.pathname.replace(/^\/+|\/+$/g, '').split('/');
+      if (parts.length < 2 || SKIP.has(parts[0].toLowerCase())) return '';
+      if (parts[0].startsWith('@') || parts[1] === 'search') return '';
+      return `https://github.com/${parts[0]}/${parts[1]}`;
+    } catch {
+      return '';
+    }
+  }
+  const results = [];
+  const seen = new Set();
+  const nodes = document.querySelectorAll(
+    'a[data-hovercard-type="repository"], .search-title a, div[data-testid="results-list"] a, .repo-list-item a, li[id^="user-content"] a, a[href]'
+  );
+  nodes.forEach((a) => {
+    const url = repoUrl(a.getAttribute('href') || '');
+    if (!url || seen.has(url)) return;
+    const title = (a.textContent || '').replace(/\s+/g, ' ').trim() || url.replace('https://github.com/', '');
+    if (!title || title.length < 2) return;
+    const wrap = a.closest('div, li, article') || a.parentElement;
+    const s = wrap && wrap.querySelector('p, .search-match, [class*="description"]');
+    seen.add(url);
+    results.push({ title, url, snippet: s ? (s.textContent || '').replace(/\s+/g, ' ').trim() : '' });
+  });
+  return results;
+}
+
+function parseWikipedia() {
+  const results = [];
+  const seen = new Set();
+  function abs(href) {
+    try {
+      return new URL(href, location.href).href;
+    } catch {
+      return href;
+    }
+  }
+  document.querySelectorAll('li.mw-search-result, .mw-search-results li').forEach((el) => {
+    const a = el.querySelector('.mw-search-result-heading a, a[data-serp-pos], a[href^="/wiki/"]');
+    if (!a) return;
+    const url = abs(a.getAttribute('href') || '');
+    if (!/^https?:\/\//i.test(url) || seen.has(url)) return;
+    const title = ((a.getAttribute('title') || a.textContent || '')).replace(/\s+/g, ' ').trim();
+    if (!title || title.length < 2) return;
+    const s = el.querySelector('.searchresult, .mw-search-result-data, .search-snippet');
+    seen.add(url);
+    results.push({ title, url, snippet: s ? (s.textContent || '').replace(/\s+/g, ' ').trim() : '' });
+  });
+  if (results.length === 0) {
+    document.querySelectorAll('a[href^="/wiki/"]').forEach((a) => {
+      if (a.closest('nav, #mw-navigation, #mw-head, #mw-panel, .vector-header, .mw-footer')) return;
+      const href = a.getAttribute('href') || '';
+      if (/^\/wiki\/(Special:|File:|Help:|Wikipedia:|Talk:|Template:|Category:)/i.test(href)) return;
+      const url = abs(href);
+      if (seen.has(url)) return;
+      const title = ((a.getAttribute('title') || a.textContent || '')).replace(/\s+/g, ' ').trim();
+      if (!title || title.length < 2) return;
+      seen.add(url);
+      results.push({ title, url, snippet: '' });
+    });
+  }
+  return results;
+}
+
+function parseArchive() {
+  function abs(href) {
+    try {
+      return new URL(href, 'https://archive.org').href;
+    } catch {
+      return '';
+    }
+  }
+  const results = [];
+  const seen = new Set();
+  document.querySelectorAll('.item-ia, .results .item, article, .item-ia.hov').forEach((el) => {
+    const a = el.querySelector('a[href*="/details/"]');
+    if (!a) return;
+    const url = abs(a.getAttribute('href') || '');
+    if (!/^https?:\/\//i.test(url) || seen.has(url)) return;
+    const titleEl = el.querySelector('.ttl, h2, h3, .truncate, a[href*="/details/"]');
+    const title = ((titleEl && titleEl.textContent) || a.textContent || '').replace(/\s+/g, ' ').trim();
+    if (!title || title.length < 2) return;
+    const s = el.querySelector('.by, .hidden-tiles, p, .C234');
+    seen.add(url);
+    results.push({ title, url, snippet: s ? (s.textContent || '').replace(/\s+/g, ' ').trim() : '' });
+  });
+  if (results.length === 0) {
+    document.querySelectorAll('a[href*="/details/"]').forEach((a) => {
+      const url = abs(a.getAttribute('href') || '');
+      if (!url || seen.has(url)) return;
+      const title = (a.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!title || title.length < 2) return;
+      seen.add(url);
+      results.push({ title, url, snippet: '' });
+    });
+  }
+  return results;
+}
+
 const ENGINES = {
   google: {
     url: ({ q, num, start, hl, gl, proxy }) => {
@@ -611,6 +888,66 @@ const ENGINES = {
       ready: '[data-dot="results"] a[href^="http"], .Result a[href^="http"], h3 a[href^="http"]',
       parse: parseSeznam,
     },
+    yandex: {
+      url: ({ q, start }) => {
+        const p = new URLSearchParams({ text: q });
+        if (start > 0) p.set('p', String(Math.floor(start / 10)));
+        return `https://yandex.com/search/?${p.toString()}`;
+      },
+      ready: 'li.serp-item a, .OrganicTitle-Link, a.organic__url, .serp-item a[href^="http"]',
+      parse: parseYandex,
+    },
+    shodan: {
+      url: ({ q, start }) => {
+        const p = new URLSearchParams({ query: q });
+        if (start > 0) p.set('page', String(Math.floor(start / 10) + 1));
+        return `https://www.shodan.io/search?${p.toString()}`;
+      },
+      ready: 'a[href*="/host/"], .result, .search-result',
+      parse: parseShodan,
+    },
+    marginalia: {
+      url: ({ q, start }) => {
+        const p = new URLSearchParams({ query: q });
+        if (start > 0) p.set('first', String(start + 1));
+        return `https://search.marginalia.nu/search?${p.toString()}`;
+      },
+      ready: 'section a[href^="http"], article a[href^="http"], main a[href^="http"]',
+      parse: parseMarginalia,
+    },
+    wiby: {
+      url: ({ q }) => `https://wiby.me/?q=${encodeURIComponent(q)}`,
+      ready: 'a[href^="http"]',
+      parse: parseWiby,
+    },
+    github: {
+      url: ({ q, start }) => {
+        const p = new URLSearchParams({ q, type: 'repositories' });
+        if (start > 0) p.set('p', String(Math.floor(start / 10) + 1));
+        return `https://github.com/search?${p.toString()}`;
+      },
+      ready: 'a[data-hovercard-type="repository"], .search-title a, div[data-testid="results-list"] a, a[href^="/"]',
+      parse: parseGithub,
+    },
+    wikipedia: {
+      url: ({ q, start, hl }) => {
+        const lang = String(hl || 'en').slice(0, 8) || 'en';
+        const p = new URLSearchParams({ search: q, title: 'Special:Search', fulltext: '1' });
+        if (start > 0) p.set('offset', String(start));
+        return `https://${lang}.wikipedia.org/w/index.php?${p.toString()}`;
+      },
+      ready: 'li.mw-search-result a, .mw-search-results a, a[href^="/wiki/"]',
+      parse: parseWikipedia,
+    },
+    archive: {
+      url: ({ q, start }) => {
+        const p = new URLSearchParams({ query: q });
+        if (start > 0) p.set('page', String(Math.floor(start / 10) + 1));
+        return `https://archive.org/search?${p.toString()}`;
+      },
+      ready: 'a[href*="/details/"], .item-ia, .results .item',
+      parse: parseArchive,
+    },
   };
 
 function names() {
@@ -640,6 +977,13 @@ function detectBlock(engine) {
      ecosia: 'article.result a[href^="http"], .result a.result-title',
      swisscows: '.web-results .item a[href^="http"], article a[href^="http"]',
      seznam: '[data-dot="results"] a[href^="http"], h3 a[href^="http"]',
+     yandex: 'li.serp-item a, .OrganicTitle-Link, a.organic__url, .serp-item a[href^="http"]',
+     shodan: 'a[href*="/host/"], .result, .search-result',
+     marginalia: 'section a[href^="http"], article a[href^="http"], main a[href^="http"]',
+     wiby: 'a[href^="http"]',
+     github: 'a[data-hovercard-type="repository"], .search-title a, a[href^="/"]',
+     wikipedia: 'li.mw-search-result a, .mw-search-results a, a[href^="/wiki/"]',
+     archive: 'a[href*="/details/"], .item-ia',
   };
   const hasResults = !!document.querySelector(resultSelectors[engine] || 'html');
 
@@ -647,12 +991,17 @@ function detectBlock(engine) {
     google: 'Google', bing: 'Bing', brave: 'Brave', mojeek: 'Mojeek',
     startpage: 'Startpage', yahoo: 'Yahoo', duckduckgo: 'DuckDuckGo',
      duckduckgo_lite: 'DuckDuckGo', qwant: 'Qwant',
-     ecosia: 'Ecosia', swisscows: 'Swisscows', seznam: 'Seznam',
+     ecosia: 'Ecosia', swisscows: 'Swisscows', seznam: 'Seznam', yandex: 'Yandex', shodan: 'Shodan',
+     marginalia: 'Marginalia', wiby: 'Wiby', github: 'GitHub', wikipedia: 'Wikipedia', archive: 'Internet Archive',
   };
   const store = STORE_NAME[engine] || engine;
 
   // 1) URL-level hard signals.
   if (url.includes('/sorry/')) return `${store} is showing its "unusual traffic" interstitial for this IP.`;
+  if (/showcaptcha/i.test(url)) return `${store} redirected to a SmartCaptcha challenge.`;
+  if (engine === 'shodan' && (/\/login/i.test(url) || low.includes('please log in') || low.includes('log in to search') || low.includes('create a free account'))) {
+    return `${store} requires a logged-in session for search (public HTML, no API key).`;
+  }
   if (/\/(captcha|recaptcha|challenge|sorry)\//i.test(url)) return `${store} redirected to an anti-bot challenge (${url.split('?')[0]}).`;
 
   // 2) Strong anti-automation phrases — decisive whenever they appear.
