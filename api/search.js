@@ -14,6 +14,10 @@ const {
   setStickyGoogleProxy,
   dropStickyGoogleProxy,
   proxyIdentity,
+  googleProxyPool,
+  otherProxyPool,
+  classifyProxy,
+  partitionPool,
 } = require('./lib/proxyPool');
 const { getCache } = require('./lib/cache');
 const { send, cors, authOk, unauthorized, maskProxy } = require('./lib/http');
@@ -90,15 +94,19 @@ function buildGoogleTries(explicitProxy, stickyKey) {
       /* ignore */
     }
   }
-  let pool = getShardPool().map((p) => g.preferHttp(p));
+  let pool = googleProxyPool(getShardPool()).map((p) => g.preferHttp(p));
   pool = googleIp.pickOpen(pool);
   const tries = [];
   const seen = new Set();
   const sticky = peekStickyGoogleProxy(stickyKey);
   if (sticky && !googleIp.isOpen(sticky)) {
     const one = g.preferHttp(sticky);
-    tries.push(one);
-    seen.add(proxyIdentity(one));
+    const kinds = partitionPool(pool);
+    const dcSticky = classifyProxy(one) === 'datacenter' && kinds.residential.length > 0;
+    if (!dcSticky) {
+      tries.push(one);
+      seen.add(proxyIdentity(one));
+    }
   }
   const max = Math.min(pool.length, retryAttempts(intEnv('GOOGLE_PROXY_ATTEMPTS', intEnv('PROXY_ATTEMPTS', 6))));
   while (tries.length < max) {
@@ -109,9 +117,7 @@ function buildGoogleTries(explicitProxy, stickyKey) {
     seen.add(id);
     tries.push(next);
   }
-  const user = getUserProxies().length > 0;
-  const fallbackDefault = user ? '0' : '1';
-  const fallbackDirect = String(process.env.PROXY_FALLBACK_DIRECT || fallbackDefault) !== '0';
+  const fallbackDirect = String(process.env.PROXY_FALLBACK_DIRECT || '1') !== '0';
   if (fallbackDirect && !tries.includes(null)) tries.push(null);
   return tries.length ? tries : [null];
 }
@@ -127,7 +133,7 @@ function buildTries(explicitProxy, proxyless, engine, stickyKey) {
   } catch {
     /* ignore */
   }
-  const pool = getShardPool().sort(() => Math.random() - 0.5);
+  const pool = otherProxyPool(getShardPool()).sort(() => Math.random() - 0.5);
   const user = getUserProxies().length > 0;
   const picks = Math.min(pool.length, retryAttempts(intEnv('PROXY_ATTEMPTS', user ? 1 : 2)));
   const tries = [];
@@ -136,8 +142,7 @@ function buildTries(explicitProxy, proxyless, engine, stickyKey) {
     const alt = altProxy(p);
     if (alt && !tries.includes(alt)) tries.push(alt);
   }
-  const fallbackDefault = user ? '0' : '1';
-  const fallbackDirect = String(process.env.PROXY_FALLBACK_DIRECT || fallbackDefault) !== '0';
+  const fallbackDirect = String(process.env.PROXY_FALLBACK_DIRECT || '1') !== '0';
   if (fallbackDirect || tries.length === 0) tries.push(null);
   return tries;
 }

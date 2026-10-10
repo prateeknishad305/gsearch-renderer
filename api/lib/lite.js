@@ -364,8 +364,8 @@ function decodeChunked(body) {
 
 function liveProxies() {
   try {
-    const { getShardPool } = require('./proxyPool');
-    return getShardPool().filter(Boolean);
+    const { getShardPool, otherProxyPool } = require('./proxyPool');
+    return otherProxyPool(getShardPool()).filter(Boolean);
   } catch {
     return [];
   }
@@ -400,33 +400,12 @@ function raceProxyFetch(url, engine, timeoutMs, n) {
   });
 }
 
-async function fetchLitePage(url, engine) {
-  const headers = {
-    'user-agent': UA,
-    'accept-language': 'en-US,en;q=0.9',
-    accept: 'text/html,application/xhtml+xml',
-  };
-  if (engine === 'google') {
-    try {
-      return await raceProxyFetch(url, engine, 2200, 3);
-    } catch (err) {
-      const e = new Error(`Lite fetch failed: ${(err && err.message) || 'proxy race'}`);
-      e.code = (err && err.code) || 'LITE_FETCH_ERROR';
-      throw e;
-    }
-  }
-  let resp;
-  try {
-    resp = await fetch(url, {
-      headers,
-      redirect: 'follow',
-      signal: AbortSignal.timeout(15000),
-    });
-  } catch (err) {
-    const e = new Error(`Lite fetch failed: ${err.message}`);
-    e.code = 'LITE_FETCH_ERROR';
-    throw e;
-  }
+async function fetchDirect(url, engine, headers) {
+  const resp = await fetch(url, {
+    headers,
+    redirect: 'follow',
+    signal: AbortSignal.timeout(15000),
+  });
   const html = await resp.text();
   if (resp.status === 202 || resp.status === 403 || resp.status === 429 || isBlockedPage(html, engine)) {
     const e = new Error(`Engine "${engine}" blocked plain-HTTP fetch (status ${resp.status})`);
@@ -439,6 +418,39 @@ async function fetchLitePage(url, engine) {
     throw e;
   }
   return html;
+}
+
+async function fetchLitePage(url, engine) {
+  const headers = {
+    'user-agent': UA,
+    'accept-language': 'en-US,en;q=0.9',
+    accept: 'text/html,application/xhtml+xml',
+  };
+  if (engine === 'google') {
+    try {
+      return await raceProxyFetch(url, engine, 2200, 3);
+    } catch {
+      /* DC race failed — fall through to direct IP */
+    }
+    try {
+      return await fetchDirect(url, engine, headers);
+    } catch (err) {
+      const e = new Error(`Lite fetch failed: ${(err && err.message) || 'direct'}`);
+      e.code = (err && err.code) || 'LITE_FETCH_ERROR';
+      throw e;
+    }
+  }
+  try {
+    return await fetchDirect(url, engine, headers);
+  } catch (directErr) {
+    try {
+      return await raceProxyFetch(url, engine, 4000, 3);
+    } catch {
+      const e = new Error(`Lite fetch failed: ${directErr.message}`);
+      e.code = directErr.code || 'LITE_FETCH_ERROR';
+      throw e;
+    }
+  }
 }
 
 async function fastLiteSearch({ engine, query, num = 10, hl = 'en', gl = 'us', start = 0 }) {

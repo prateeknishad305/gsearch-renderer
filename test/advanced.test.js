@@ -101,6 +101,39 @@ test('pageStep uses 10 for google and num for other engines', () => {
   assert.strictEqual(autoPageCount('yahoo', 25), 3);
 });
 
+test('classifyProxy detects residential vs datacenter vs direct', () => {
+  const { classifyProxy, partitionPool, googleProxyPool, otherProxyPool } = require('../api/lib/proxyPool');
+  assert.equal(classifyProxy(null), 'direct');
+  assert.equal(classifyProxy('http://resi.example.com:8081'), 'residential');
+  assert.equal(classifyProxy('http://user-country=us:pass@gate.smartproxy.com:7000'), 'residential');
+  assert.equal(classifyProxy('http://user_session-abc:x@isp.oxylabs.io:8000'), 'residential');
+  assert.equal(classifyProxy('http://1.2.3.4:8081'), 'datacenter');
+  assert.equal(classifyProxy('http://dc.hetzner.example:3128'), 'datacenter');
+  assert.equal(classifyProxy('http://proxy.example.net:8080'), 'unknown');
+  const pool = [
+    'http://resi.foo:1',
+    'http://1.2.3.4:8081',
+    'http://gate.unknown.net:80',
+  ];
+  const parts = partitionPool(pool);
+  assert.equal(parts.residential.length, 1);
+  assert.equal(parts.datacenter.length, 1);
+  assert.equal(parts.unknown.length, 1);
+  const g = googleProxyPool(pool);
+  assert.equal(g[0], 'http://resi.foo:1');
+  assert.ok(!g.includes('http://1.2.3.4:8081'));
+  const o = otherProxyPool(pool);
+  assert.equal(o[0], 'http://1.2.3.4:8081');
+  assert.ok(o.includes('http://resi.foo:1'));
+});
+
+test('googleProxyPool falls back to DC when no residential', () => {
+  const { googleProxyPool, otherProxyPool } = require('../api/lib/proxyPool');
+  const dc = ['http://10.0.0.1:8081', 'http://10.0.0.2:8081'];
+  assert.deepEqual(googleProxyPool(dc), dc);
+  assert.deepEqual(otherProxyPool(dc), dc);
+});
+
 test('takeGoogleProxy hands each host once then wraps', () => {
   const { takeGoogleProxy, resetGoogleUsed, googleUsedCount, proxyIdentity } = require('../api/lib/proxyPool');
   resetGoogleUsed();

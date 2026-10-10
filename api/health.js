@@ -44,6 +44,7 @@ module.exports = async (req, res) => {
       google_fixes: require('./lib/google').FIXES.length,
       google_udm: String(process.env.GOOGLE_UDM || '1') !== '0',
       google_sticky: String(process.env.GOOGLE_STICKY || '1') !== '0',
+      proxy_kind: true,
     },
   });
 };

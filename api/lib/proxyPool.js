@@ -139,6 +139,64 @@ function proxyIdentity(p) {
   }
 }
 
+const RESI_HOST = /resi|residential|isp\b|mobile|4g|5g|rotat|sticky|peer|soax|brightdata|oxylabs|smartproxy|iproyal|packetstream|netnut|rayobyte|luminati|geonode|proxyempire|evomi|ipidea/i;
+const RESI_USER = /resi|residential|isp\b|mobile|rotat|sessid|session-|country=|city=|state=|asn=|region=/i;
+const DC_HOST = /datacent|dedicated|\bdc\b|server|hetzner|ovh|digitalocean|linode|vultr|amazonaws|googleusercontent|azure|leaseweb|contabo|hostinger|squid|colo|cloud/i;
+const DC_USER = /datacent|\bdc[_-]|\bdedicated\b/i;
+
+function proxyParts(proxy) {
+  try {
+    const u = new URL(String(proxy || ''));
+    let user = '';
+    try {
+      user = decodeURIComponent(u.username || '');
+    } catch {
+      user = u.username || '';
+    }
+    return { host: u.hostname || '', user };
+  } catch {
+    return { host: String(proxy || ''), user: '' };
+  }
+}
+
+function classifyProxy(proxy) {
+  if (!proxy) return 'direct';
+  const { host, user } = proxyParts(proxy);
+  if (RESI_HOST.test(host) || RESI_USER.test(user)) return 'residential';
+  if (DC_HOST.test(host) || DC_USER.test(user)) return 'datacenter';
+  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)) return 'datacenter';
+  return 'unknown';
+}
+
+function isResidential(proxy) {
+  return classifyProxy(proxy) === 'residential';
+}
+
+function partitionPool(pool) {
+  const residential = [];
+  const unknown = [];
+  const datacenter = [];
+  for (const p of Array.isArray(pool) ? pool : []) {
+    if (!p) continue;
+    const kind = classifyProxy(p);
+    if (kind === 'residential') residential.push(p);
+    else if (kind === 'unknown') unknown.push(p);
+    else datacenter.push(p);
+  }
+  return { residential, unknown, datacenter };
+}
+
+function googleProxyPool(pool) {
+  const { residential, unknown, datacenter } = partitionPool(pool);
+  if (residential.length) return residential.concat(unknown);
+  return unknown.concat(datacenter);
+}
+
+function otherProxyPool(pool) {
+  const { residential, unknown, datacenter } = partitionPool(pool);
+  return datacenter.concat(unknown, residential);
+}
+
 function takeGoogleProxy(pool, exclude) {
   const skip = exclude instanceof Set ? exclude : new Set();
   const list = (Array.isArray(pool) ? pool : []).filter(Boolean);
@@ -225,6 +283,14 @@ function poolInfo() {
     shard_size: shard.length,
     proxies_available: shard.length,
     source,
+    kinds: (() => {
+      const k = partitionPool(shard);
+      return {
+        residential: k.residential.length,
+        datacenter: k.datacenter.length,
+        unknown: k.unknown.length,
+      };
+    })(),
     fetcher,
   };
 }
@@ -251,4 +317,9 @@ module.exports = {
   dropStickyGoogleProxy,
   googleUsedCount,
   resetGoogleUsed,
+  classifyProxy,
+  isResidential,
+  partitionPool,
+  googleProxyPool,
+  otherProxyPool,
 };
