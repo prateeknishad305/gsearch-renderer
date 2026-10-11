@@ -8,7 +8,8 @@ function intEnv(name, dflt) {
 }
 
 const IDLE_MS = intEnv('BROWSER_IDLE_MS', 120000);
-const WORKERS = intEnv('BROWSER_WORKERS', intEnv('MAX_CONTEXTS', 4));
+const serverless = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.AWS_EXECUTION_ENV);
+const WORKERS = intEnv('BROWSER_WORKERS', intEnv('MAX_CONTEXTS', serverless ? 1 : 4));
 const MAX_CONTEXTS = WORKERS;
 
 const cache = new Map();

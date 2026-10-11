@@ -56,6 +56,40 @@ function extraArgs() {
     .filter(Boolean);
 }
 
+function isServerless() {
+  return !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.AWS_EXECUTION_ENV);
+}
+
+const SERVERLESS_ARGS = [
+  '--single-process',
+  '--no-zygote',
+  '--disable-dev-shm-usage',
+  '--disable-gpu',
+  '--disable-gpu-compositing',
+  '--disable-software-rasterizer',
+  '--disable-extensions',
+  '--disable-background-networking',
+  '--disable-sync',
+  '--disable-translate',
+  '--mute-audio',
+  '--hide-scrollbars',
+  '--no-first-run',
+  '--renderer-process-limit=1',
+  '--js-flags=--max-old-space-size=192',
+  '--disable-features=TranslateUI,IsolateOrigins,site-per-process,AudioServiceOutOfProcess,MediaRouter',
+];
+
+function mergeArgs(base, extra) {
+  const seen = new Set();
+  const out = [];
+  for (const a of [...(base || []), ...(extra || [])]) {
+    if (!a || seen.has(a)) continue;
+    seen.add(a);
+    out.push(a);
+  }
+  return out;
+}
+
 function findSystemChromium() {
   const fromEnv =
     existingPath(process.env.CHROMIUM_PATH) ||
@@ -118,17 +152,23 @@ async function resolveLaunch() {
     cachedLaunch = {
       source: 'system',
       executablePath: systemPath,
-      args: [...SYSTEM_ARGS, ...extraArgs()],
+      args: mergeArgs(SYSTEM_ARGS, [...(isServerless() ? SERVERLESS_ARGS : []), ...extraArgs()]),
       platform: detectPlatform(),
     };
     return cachedLaunch;
   }
 
   const chromiumBin = await loadSparticuz();
+  try {
+    if (typeof chromiumBin.setGraphicsMode === 'function') chromiumBin.setGraphicsMode(false);
+    else chromiumBin.setGraphicsMode = false;
+  } catch {
+    /* older @sparticuz/chromium */
+  }
   cachedLaunch = {
     source: 'sparticuz',
     executablePath: await chromiumBin.executablePath(),
-    args: [...chromiumBin.args, ...extraArgs()],
+    args: mergeArgs(chromiumBin.args || [], [...(isServerless() ? SERVERLESS_ARGS : []), ...extraArgs()]),
     platform: detectPlatform(),
   };
   return cachedLaunch;
@@ -141,6 +181,7 @@ function runtimeInfo() {
     platform: detectPlatform(),
     chromium_source: source,
     chromium_path: (cachedLaunch && cachedLaunch.executablePath) || systemPath || null,
+    serverless: isServerless(),
   };
 }
 
@@ -154,6 +195,9 @@ module.exports = {
   runtimeInfo,
   detectPlatform,
   chooseSource,
+  isServerless,
+  mergeArgs,
   resetLaunchCache,
   SYSTEM_ARGS,
+  SERVERLESS_ARGS,
 };
