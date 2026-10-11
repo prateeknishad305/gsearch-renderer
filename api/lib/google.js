@@ -266,8 +266,12 @@ const BLOCK_HOST =
   /(?:^|\.)(?:doubleclick\.net|googleadservices\.com|googlesyndication\.com|googletagmanager\.com|google-analytics\.com|facebook\.com|scorecardresearch\.com|adservice\.google\.com)$/i;
 const BLOCK_TYPE = new Set(['image', 'media', 'font', 'imageset']);
 
+function assetBlockDefault() {
+  return !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.AWS_EXECUTION_ENV);
+}
+
 function shouldBlockRequest(url, resourceType) {
-  if (!envFlag('GOOGLE_BLOCK_ASSETS', false)) return false;
+  if (!envFlag('GOOGLE_BLOCK_ASSETS', assetBlockDefault())) return false;
   const type = String(resourceType || '');
   if (BLOCK_TYPE.has(type)) return true;
   try {
@@ -281,7 +285,7 @@ function shouldBlockRequest(url, resourceType) {
 }
 
 async function attachRoutes(page) {
-  if (!envFlag('GOOGLE_BLOCK_ASSETS', false)) return;
+  if (!envFlag('GOOGLE_BLOCK_ASSETS', assetBlockDefault())) return;
   await page.route('**/*', (route) => {
     const req = route.request();
     if (shouldBlockRequest(req.url(), req.resourceType())) return route.abort();
@@ -551,6 +555,7 @@ module.exports = {
   googleInitScript,
   languageList,
   filterResults,
+  assetBlockDefault,
   FIXES,
   TZ,
   LANG,

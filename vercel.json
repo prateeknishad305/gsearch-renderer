@@ -1,5 +1,11 @@
 {
   "version": 2,
+  "functions": {
+    "api/search.js": { "maxDuration": 60, "memory": 1024 },
+    "api/batch.js": { "maxDuration": 60, "memory": 1024 },
+    "api/serper.js": { "maxDuration": 60, "memory": 1024 },
+    "api/crawl.js": { "maxDuration": 60, "memory": 1024 }
+  },
   "rewrites": [
     { "source": "/", "destination": "/api/search" },
     { "source": "/search", "destination": "/api/search" },

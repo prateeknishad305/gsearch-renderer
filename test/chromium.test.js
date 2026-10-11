@@ -2,7 +2,7 @@
 
 const { test, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
-const { chooseSource, detectPlatform, resetLaunchCache } = require('../api/lib/chromium');
+const { chooseSource, detectPlatform, resetLaunchCache, isServerless, mergeArgs, SERVERLESS_ARGS } = require('../api/lib/chromium');
 
 const KEYS = [
   'VERCEL',
@@ -51,6 +51,22 @@ test('CHROMIUM_SOURCE=system forces system', () => {
 test('CHROMIUM_SOURCE=sparticuz forces sparticuz', () => {
   process.env.CHROMIUM_SOURCE = 'sparticuz';
   assert.equal(chooseSource('/usr/bin/chromium'), 'sparticuz');
+});
+
+test('isServerless is true on Vercel', () => {
+  assert.equal(isServerless(), false);
+  process.env.VERCEL = '1';
+  assert.equal(isServerless(), true);
+});
+
+test('SERVERLESS_ARGS include single-process and no-zygote', () => {
+  assert.ok(SERVERLESS_ARGS.includes('--single-process'));
+  assert.ok(SERVERLESS_ARGS.includes('--no-zygote'));
+  assert.ok(SERVERLESS_ARGS.includes('--disable-dev-shm-usage'));
+});
+
+test('mergeArgs drops empty and duplicate flags', () => {
+  assert.deepEqual(mergeArgs(['--a', '--b'], ['--b', '--c', '']), ['--a', '--b', '--c']);
 });
 
 test('detectPlatform maps known host env vars', () => {

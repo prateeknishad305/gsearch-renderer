@@ -19,7 +19,7 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug, pr
   const t0 = Date.now();
   const google = engine === 'google';
 
-  if (google) await g.attachRoutes(page);
+  if (google || process.env.VERCEL) await g.attachRoutes(page);
 
   if (cfg.cookies) {
     const sticky = google && session.get(proxy);

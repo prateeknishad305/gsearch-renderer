@@ -84,6 +84,20 @@ test('asset blocker keeps document/script/stylesheet', () => {
   else process.env.GOOGLE_BLOCK_ASSETS = prev;
 });
 
+test('Vercel defaults to blocking images without GOOGLE_BLOCK_ASSETS', () => {
+  const prevV = process.env.VERCEL;
+  const prevB = process.env.GOOGLE_BLOCK_ASSETS;
+  process.env.VERCEL = '1';
+  delete process.env.GOOGLE_BLOCK_ASSETS;
+  assert.equal(g.assetBlockDefault(), true);
+  assert.equal(g.shouldBlockRequest('https://www.google.com/x.png', 'image'), true);
+  assert.equal(g.shouldBlockRequest('https://www.google.com/search', 'document'), false);
+  if (prevV === undefined) delete process.env.VERCEL;
+  else process.env.VERCEL = prevV;
+  if (prevB === undefined) delete process.env.GOOGLE_BLOCK_ASSETS;
+  else process.env.GOOGLE_BLOCK_ASSETS = prevB;
+});
+
 test('sorry and soft-block detectors', () => {
   assert.equal(g.isSorryUrl('https://www.google.com/sorry/index?continue=x'), true);
   assert.equal(g.isSorryUrl('https://www.google.com/sorry/index?continue=x&q=unusual-traffic'), true);

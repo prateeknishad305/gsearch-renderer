@@ -125,8 +125,8 @@ interstitial), retries with another member before falling back to a direct reque
 | `BROWSER`           | `chromium` | Default render flavor (`chromium`, `firefox`, `edge`, `safari`, `brave`, `tor`). Overridden by `?browser=`. Native binary when installed; else Chromium + that UA. |
 | `BROWSER_REUSE`     | `1`     | Reuse a long-lived Chromium + page pool per process (big win on containers; a no-op on Vercel where browsers are reaped). `0` = one browser per request. |
 | `BROWSER_IDLE_MS`   | `120000`| Close an idle pooled browser after this long |
-| `MAX_CONTEXTS`      | `4`     | Max concurrent tabs per instance (bounds memory) |
-| `BROWSER_WORKERS`   | `MAX_CONTEXTS` | Size of the reusable page pool |
+| `MAX_CONTEXTS`      | `4` (`1` on Vercel) | Max concurrent tabs per instance (bounds memory) |
+| `BROWSER_WORKERS`   | `MAX_CONTEXTS` | Size of the reusable page pool. Vercel/serverless defaults to `1` so Chromium does not OOM (`ERR_INSUFFICIENT_RESOURCES`). |
 | `MAX_RETRIES`       | *(unset)* | Extra proxy attempts after the first (`0` = one try) |
 | `NAVIGATION_TIMEOUT`| *(unset)* | Alias for `GOOGLE_NAV_MS` (page.goto timeout) |
 | `RESULT_TIMEOUT`    | *(unset)* | Alias for `GOOGLE_READY_MS` (wait-for-h3) |
@@ -192,7 +192,7 @@ This repo is not Vercel-only. Long-lived hosts run `node server.js` (`npm start`
 | Docker / VPS | `docker compose up --build` | `Dockerfile`, `docker-compose.yml` |
 | Railway | Docker build from `railway.toml` | `railway.toml`, `Dockerfile` |
 | Render | Docker web service from `render.yaml` | `render.yaml`, `Dockerfile` |
-| Vercel | serverless `api/*.js` | `vercel.json` |
+| Vercel | serverless `api/*.js` | `vercel.json` (1 Chromium worker, `--single-process`, images/fonts aborted) |
 
 Give containers at least **1 GB RAM**. Chromium will not stay healthy on tiny free plans. `GET /api/health` is public so platform probes work even when `API_TOKEN` is set. Railway and Render inject `PORT`; the process binds `HOST=0.0.0.0`.
 
