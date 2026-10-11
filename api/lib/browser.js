@@ -9,14 +9,13 @@
 // surfaces as a normal JSON error instead of crashing module evaluation.
 
 const { resolveLaunch } = require('./chromium');
+const flavor = require('./browserFlavor');
 
-let playwright = null;
+let pwMod = null;
 
-function loadPlaywright() {
-  if (!playwright) {
-    playwright = require('playwright-core').chromium;
-  }
-  return playwright;
+function loadPlaywrightMod() {
+  if (!pwMod) pwMod = require('playwright-core');
+  return pwMod;
 }
 
 const STEALTH_ARGS = ['--disable-blink-features=AutomationControlled', '--no-first-run'];
@@ -26,14 +25,26 @@ const STEALTH_ARGS = ['--disable-blink-features=AutomationControlled', '--no-fir
 // stalls (curl h2 works, so it is a Chromium-h2-specific path bug). Falling
 // back to HTTP/1.1 only when a proxy is in play keeps direct connections on h2
 // while making proxied Google requests complete.
-async function launchBrowser({ disableHttp2 = false } = {}) {
-  const launch = await resolveLaunch();
-  const pw = loadPlaywright();
+async function launchBrowser({ disableHttp2 = false, browser: browserName } = {}) {
+  const spec = flavor.resolveFlavor(browserName);
   const extra = disableHttp2 ? ['--disable-http2'] : [];
   const g = require('./google');
-  return pw.launch({
+  const pw = loadPlaywrightMod();
+  if (spec.engine === 'firefox') {
+    const opts = { headless: true };
+    if (spec.executablePath) opts.executablePath = spec.executablePath;
+    return pw.firefox.launch(opts);
+  }
+  if (spec.engine === 'webkit') {
+    const opts = { headless: true };
+    if (spec.executablePath) opts.executablePath = spec.executablePath;
+    return pw.webkit.launch(opts);
+  }
+  const launch = await resolveLaunch();
+  const exe = spec.executablePath && (spec.id === 'edge' || spec.id === 'brave') ? spec.executablePath : launch.executablePath;
+  return pw.chromium.launch({
     args: [...launch.args, ...STEALTH_ARGS, ...g.chromiumArgs(), ...extra],
-    executablePath: launch.executablePath,
+    executablePath: exe,
     headless: true,
     ignoreDefaultArgs: ['--enable-automation'],
   });
@@ -45,13 +56,13 @@ async function launchBrowser({ disableHttp2 = false } = {}) {
 const DESKTOP_UA =
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36';
 
-async function resolveUA(browser, fallback) {
+async function resolveUA(browser, fallback, flavorId) {
+  const id = flavor.normalizeFlavor(flavorId);
+  if (id !== 'chromium') return flavor.uaFor(id, 125);
   try {
-    const ver = await browser.version(); // e.g. "HeadlessChrome/149.0.6324.32"
+    const ver = await browser.version();
     const m = String(ver).match(/(\d+)\.[\d.]+/);
-    if (m) {
-      return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${m[1]}.0.0.0 Safari/537.36`;
-    }
+    if (m) return flavor.uaFor('chromium', m[1]);
   } catch {
     /* ignore */
   }
@@ -128,4 +139,5 @@ module.exports = {
   parseProxy,
   stealthMarkup,
   resolveUA,
+  flavor,
 };

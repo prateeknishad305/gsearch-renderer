@@ -66,7 +66,7 @@ module.exports = async (req, res) => {
   const pages = autoPageCount(input.engine, input.num);
   const t0 = Date.now();
   const cache = getCache();
-  const cacheKey = JSON.stringify(['serper', input.engine, input.q, input.num, input.page, input.hl, input.gl]);
+  const cacheKey = JSON.stringify(['serper', input.engine, input.q, input.num, input.page, input.hl, input.gl, input.browser]);
   if (!input.nocache) {
     const hit = cache.get(cacheKey);
     if (hit) return send(res, { ...hit, cached: true });
@@ -87,6 +87,7 @@ module.exports = async (req, res) => {
       gl: input.gl,
       autoPages: true,
       liteOnly,
+      browser: input.browser,
     });
     if (!r || !r.results || !r.results.length) return null;
     const out = toSerperBody({

@@ -149,7 +149,7 @@ function buildTries(explicitProxy, proxyless, engine, stickyKey) {
 
 // Runs one engine, optionally across multiple result pages, merging unique URLs.
 // autoPages=true keeps fetching until `num` unique URLs (or MAX_PAGES).
-async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en', gl = 'us', proxy, debug, autoPages = false, proxyless = false, liteOnly = false }) {
+async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en', gl = 'us', proxy, debug, autoPages = false, proxyless = false, liteOnly = false, browser }) {
   const pageCount = Math.min(Math.max(1, pages), MAX_PAGES);
   const step = pageStep(engine, num);
   const perPage = perPageNum(engine, num);
@@ -221,7 +221,7 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
       }
       localAttempts += 1;
       try {
-        const r = await runQuery({ engine, query, num: perPage, start: offset, hl, gl, proxy: candidate, debug });
+          const r = await runQuery({ engine, query, num: perPage, start: offset, hl, gl, proxy: candidate, debug, browser });
         pageResults = r.results;
         dur = r.duration_ms;
         used = candidate;
@@ -242,7 +242,7 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
         if (candidate == null) continue;
         localAttempts += 1;
         try {
-          const r = await runQuery({ engine, query, num: perPage, start: offset, hl, gl, proxy: candidate, debug });
+        const r = await runQuery({ engine, query, num: perPage, start: offset, hl, gl, proxy: candidate, debug, browser });
           pageResults = r.results;
           dur = r.duration_ms;
           used = candidate;
@@ -364,7 +364,7 @@ module.exports = async (req, res) => {
       service: 'gsearch-renderer',
       ok: true,
       usage:
-        'GET /api/search?q=<query>&engine=<name>  OR  engines=<name,name,...|&*>  mode=fallback|merge  num= pages= hl= gl= proxy= nocache= token=',
+        'GET /api/search?q=<query>&engine=<name>  OR  engines=<name,name,...|&*>  mode=fallback|merge  num= pages= hl= gl= proxy= nocache= browser=chromium|firefox|edge|safari|brave|tor token=',
       engines: names(),
       pool: poolInfo(),
       note:
@@ -394,6 +394,7 @@ module.exports = async (req, res) => {
   const hl = String(req.query.hl || 'en').slice(0, 8);
   const gl = String(req.query.gl || 'us').slice(0, 8);
   const proxy = String(req.query.proxy || '').trim();
+  const browser = require('./lib/browserFlavor').normalizeFlavor(req.query.browser || req.query.ua);
   const debug = req.query.debug === '1';
   const proxyless = req.query.proxyless === '1' || req.query.proxyless === 'true';
   const mode = String(req.query.mode || 'fallback').toLowerCase() === 'merge' ? 'merge' : 'fallback';
@@ -401,7 +402,7 @@ module.exports = async (req, res) => {
   const t0 = Date.now();
 
   const cache = getCache();
-  const cacheKey = JSON.stringify(['v4', engineList.join(','), mode, q, num, pagesGiven ? pages : 'auto', start, hl, gl, proxyless ? 1 : 0]);
+  const cacheKey = JSON.stringify(['v5', engineList.join(','), mode, q, num, pagesGiven ? pages : 'auto', start, hl, gl, proxyless ? 1 : 0, browser]);
   if (useCache) {
     const hit = cache.get(cacheKey);
     if (hit) {
@@ -413,7 +414,7 @@ module.exports = async (req, res) => {
     const settled = await Promise.all(
       engineList.map(async (engine) => {
         try {
-          const r = await searchEngine({ engine, query: q, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless });
+          const r = await searchEngine({ engine, query: q, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless, browser });
           return { engine, ok: true, r };
         } catch (err) {
           return { engine, ok: false, err };
@@ -435,6 +436,7 @@ module.exports = async (req, res) => {
       duration_ms: duration,
       response_time_ms: Date.now() - t0,
       source: ok.map((s) => s.r.source).filter(Boolean).join(',') || 'none',
+      browser,
     };
     stats.recordSearch({
       engine: body.engine,
@@ -450,7 +452,7 @@ module.exports = async (req, res) => {
   let lastErr = new Error('no engine produced a result');
   for (const engine of engineList) {
     try {
-      const r = await searchEngine({ engine, query: q, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless });
+      const r = await searchEngine({ engine, query: q, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless, browser });
       const body = {
         engine,
         engines_tried: engineList.slice(0, engineList.indexOf(engine) + 1),
@@ -465,6 +467,7 @@ module.exports = async (req, res) => {
         pages_requested: r.pages_requested,
         source: r.source,
         proxy: maskProxy(r.proxy),
+        browser,
       };
       stats.recordSearch({ engine, ok: true, source: r.source, duration_ms: Date.now() - t0, code: 'OK' });
       if (useCache && r.results.length) cache.set(cacheKey, body);

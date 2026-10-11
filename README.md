@@ -28,10 +28,11 @@ gsearch-api scrapes search engines with plain HTTP. Some engines (Google, DuckDu
 | `nocache` | `0`      | Set to `1` to bypass the results cache |
 | `debug`   | `0`      | Set to `1` to skip the lite path/cache and include `debug_html` |
 | `token`   | *(none)* | API token when `API_TOKEN` is set on the deployment |
+| `browser` | `chromium` | Render flavor: `chromium`, `firefox`, `edge`, `safari`, `brave`, `tor`. Uses a native binary when installed; otherwise Chromium with that browser's UA. |
 
 Engines: `google`, `bing`, `brave`, `mojeek`, `startpage`, `yahoo`, `duckduckgo`, `duckduckgo_lite`, `qwant`, `ecosia`, `swisscows`, `seznam`, `yandex`, `shodan`, `marginalia`, `wiby`, `github`, `wikipedia`, `archive`. `shodan` scrapes public `shodan.io/search` HTML (no API key). `github` / `wikipedia` / `archive` keep same-host result URLs.
 
-`engines=google,bing` tries in order (fallback). `mode=merge` runs them in parallel and unions unique URLs. `engines=*` / `engines=all` tries every engine. Lite HTTP is used first for engines that serve static SERP HTML (Google `gbv=2`, DDG, Bing, Brave, Yahoo, Mojeek, Ecosia, Startpage); Chromium is the fallback. Proxies are auto-classified residential vs datacenter (host/user heuristics; bare IPs = DC). Google Chromium prefers residential and skips DC when any resi exit exists. Lite and other engines use DC first, then **direct IP** (`PROXY_FALLBACK_DIRECT`, default on).
+`engines=google,bing` tries in order (fallback). `mode=merge` runs them in parallel and unions unique URLs. `engines=*` / `engines=all` tries every engine. Lite HTTP is used first for engines that serve static SERP HTML (Google `gbv=2`, DDG, Bing, Brave, Yahoo, Mojeek, Ecosia, Startpage); Chromium is the fallback. `browser=firefox|edge|safari|brave|tor` sets the render UA (and a native binary when installed). Proxies are auto-classified residential vs datacenter (host/user heuristics; bare IPs = DC). Google Chromium prefers residential and skips DC when any resi exit exists. Lite and other engines use DC first, then **direct IP** (`PROXY_FALLBACK_DIRECT`, default on).
 
 ### `POST /search` (also `POST /api/serper`)
 
@@ -75,7 +76,7 @@ POST JSON is also accepted: `{ "url": "https://example.com", "max_pages": 3, "ma
 ### `GET /api/health`
 
 Cheap introspection for a load balancer / the operator: `pool` (`proxies_available`, shard config; fetcher URL is never returned),
-`browser` (`browserConnected`, `freePages`, `busyPages`, reuse + active/queued contexts), `cache` stats, `engines`, `features`.
+`browser` (`browserConnected`, `freePages`, `busyPages`, reuse + active/queued contexts), `browsers` (flavor binaries/native/fallback), `cache` stats, `engines`, `features`.
 
 ### `GET|POST|DELETE /api/proxies`
 
@@ -121,6 +122,7 @@ interstitial), retries with another member before falling back to a direct reque
 
 | Env var             | Default | Description |
 |---------------------|---------|-------------|
+| `BROWSER`           | `chromium` | Default render flavor (`chromium`, `firefox`, `edge`, `safari`, `brave`, `tor`). Overridden by `?browser=`. Native binary when installed; else Chromium + that UA. |
 | `BROWSER_REUSE`     | `1`     | Reuse a long-lived Chromium + page pool per process (big win on containers; a no-op on Vercel where browsers are reaped). `0` = one browser per request. |
 | `BROWSER_IDLE_MS`   | `120000`| Close an idle pooled browser after this long |
 | `MAX_CONTEXTS`      | `4`     | Max concurrent tabs per instance (bounds memory) |

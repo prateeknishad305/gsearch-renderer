@@ -775,7 +775,7 @@ const ENGINES = {
       const g = require('./google');
       return g.cookiesFor({ sticky });
     },
-    ready: 'h3, #search, #rso',
+    ready: 'h3',
     scroll: 0,
     parse: parseGoogle,
   },

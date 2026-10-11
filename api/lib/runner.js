@@ -224,7 +224,7 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug, pr
 }
 
 async function runQuery(opts) {
-  const { engine, query, num = 10, start = 0, hl = 'en', gl = 'us', proxy, debug } = opts;
+  const { engine, query, num = 10, start = 0, hl = 'en', gl = 'us', proxy, debug, browser } = opts;
   const cfg = ENGINES[engine];
   if (!cfg) {
     const e = new Error(`Unknown engine "${engine}". Available: ${Object.keys(ENGINES).join(', ')}`);
@@ -236,7 +236,7 @@ async function runQuery(opts) {
   const navMs = google ? g.navTimeoutMs() : NAV_TIMEOUT_MS;
 
   const exec = async () =>
-    withPage({ proxy, hl, gl, google, navMs }, async (page, context) =>
+    withPage({ proxy, hl, gl, google, navMs, browser }, async (page, context) =>
       renderOnPage({
         engine,
         cfg: { ...cfg, url, skipHome: start > 0 },

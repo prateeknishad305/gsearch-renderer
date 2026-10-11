@@ -119,35 +119,32 @@ function buildSearchUrl({ q, num, start, hl, gl, proxy, viewport }) {
   p.set('start', String(st));
   const n = Math.min(10, Math.max(1, Number(num) || 10));
   if (n !== 10) p.set('num', String(n));
-  if (envFlag('GOOGLE_UDM', true)) p.set('udm', String(process.env.GOOGLE_UDM_VALUE || '14'));
-  if (envFlag('GOOGLE_SOURCEID', true)) p.set('sourceid', 'chrome');
-  if (envFlag('GOOGLE_IE', true)) {
+  if (envFlag('GOOGLE_UDM', false)) p.set('udm', String(process.env.GOOGLE_UDM_VALUE || '14'));
+  if (envFlag('GOOGLE_SOURCEID', false)) p.set('sourceid', 'chrome');
+  if (envFlag('GOOGLE_IE', false)) {
     p.set('ie', 'UTF-8');
     p.set('oe', 'UTF-8');
   }
-  if (envFlag('GOOGLE_PWS', true)) p.set('pws', '0');
-  if (envFlag('GOOGLE_NFPR', true)) p.set('nfpr', '1');
-  if (envFlag('GOOGLE_COMPLETE_OFF', true)) p.set('complete', '0');
-  if (envFlag('GOOGLE_FILTER_OFF', true)) p.set('filter', '0');
+  if (envFlag('GOOGLE_PWS', false)) p.set('pws', '0');
+  if (envFlag('GOOGLE_NFPR', false)) p.set('nfpr', '1');
+  if (envFlag('GOOGLE_COMPLETE_OFF', false)) p.set('complete', '0');
+  if (envFlag('GOOGLE_FILTER_OFF', false)) p.set('filter', '0');
   const safe = String(process.env.GOOGLE_SAFE || '').trim();
   if (safe) p.set('safe', safe);
   if (envFlag('GOOGLE_GBV', false)) p.set('gbv', '2');
   const vw = (viewport && viewport.width) || 1366;
   const vh = (viewport && viewport.height) || 768;
-  if (envFlag('GOOGLE_VIEWPORT_QS', true)) {
+  if (envFlag('GOOGLE_VIEWPORT_QS', false)) {
     p.set('biw', String(vw));
     p.set('bih', String(vh));
   }
-  if (envFlag('GOOGLE_DPR', true)) p.set('dpr', '1');
+  if (envFlag('GOOGLE_DPR', false)) p.set('dpr', '1');
   if (envFlag('GOOGLE_SCLIENT', false)) p.set('sclient', 'gws-wiz-serp');
   return `https://${geo.host}/search?${p.toString()}`;
 }
 
 function cookiesFor({ sticky } = {}) {
-  if (sticky && !envFlag('GOOGLE_FAKE_CONSENT', false)) return [];
-  if (!envFlag('GOOGLE_FAKE_CONSENT', false)) {
-    return [{ name: 'SOCS', value: 'CAI', domain: '.google.com', path: '/' }];
-  }
+  if (sticky && !envFlag('GOOGLE_FAKE_CONSENT', true)) return [];
   const stamp = Date.now().toString(36);
   return [
     { name: 'CONSENT', value: `YES+cb.20210328-17-p0.en+FX+${stamp}`, domain: '.google.com', path: '/' },
@@ -216,7 +213,7 @@ function extraHeaders(geo, chromeMajor) {
     Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
     'Upgrade-Insecure-Requests': '1',
   };
-  if (envFlag('GOOGLE_CH_UA', true)) {
+  if (envFlag('GOOGLE_CH_UA', false)) {
     out['sec-ch-ua'] = `"Chromium";v="${major}", "Not.A/Brand";v="24", "Google Chrome";v="${major}"`;
     out['sec-ch-ua-mobile'] = '?0';
     out['sec-ch-ua-platform'] = '"Windows"';
@@ -270,7 +267,7 @@ const BLOCK_HOST =
 const BLOCK_TYPE = new Set(['image', 'media', 'font', 'imageset']);
 
 function shouldBlockRequest(url, resourceType) {
-  if (!envFlag('GOOGLE_BLOCK_ASSETS', true)) return false;
+  if (!envFlag('GOOGLE_BLOCK_ASSETS', false)) return false;
   const type = String(resourceType || '');
   if (BLOCK_TYPE.has(type)) return true;
   try {
@@ -284,7 +281,7 @@ function shouldBlockRequest(url, resourceType) {
 }
 
 async function attachRoutes(page) {
-  if (!envFlag('GOOGLE_BLOCK_ASSETS', true)) return;
+  if (!envFlag('GOOGLE_BLOCK_ASSETS', false)) return;
   await page.route('**/*', (route) => {
     const req = route.request();
     if (shouldBlockRequest(req.url(), req.resourceType())) return route.abort();

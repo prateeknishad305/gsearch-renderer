@@ -59,9 +59,10 @@ function dropIdleForBrowser(browser) {
   }
 }
 
-async function getBrowser({ disableHttp2 = false } = {}) {
+async function getBrowser({ disableHttp2 = false, browser: browserName } = {}) {
   const reuse = reuseOn();
-  const key = disableHttp2 ? 'h1' : 'h2';
+  const flavorId = require('./browserFlavor').normalizeFlavor(browserName);
+  const key = `${flavorId}:${disableHttp2 ? 'h1' : 'h2'}`;
 
   if (reuse) {
     const entry = cache.get(key);
@@ -73,7 +74,7 @@ async function getBrowser({ disableHttp2 = false } = {}) {
     if (entry) cache.delete(key);
   }
 
-  const browser = await launchBrowser({ disableHttp2 });
+  const browser = await launchBrowser({ disableHttp2, browser: flavorId });
   browser.on('disconnected', () => {
     const entry = cache.get(key);
     if (entry && entry.browser === browser) cache.delete(key);
@@ -87,8 +88,9 @@ async function getBrowser({ disableHttp2 = false } = {}) {
   return browser;
 }
 
-async function newContext(browser, { proxy, hl, gl, google } = {}) {
-  const ua = await resolveUA(browser, DESKTOP_UA);
+async function newContext(browser, { proxy, hl, gl, google, browser: browserName } = {}) {
+  const flavorId = require('./browserFlavor').normalizeFlavor(browserName);
+  const ua = await resolveUA(browser, DESKTOP_UA, flavorId);
   const g = google ? require('./google') : null;
   const geoOpts = g ? g.contextOptions({ proxy, hl, gl, chromeMajor: (ua.match(/Chrome\/(\d+)/) || [])[1] }) : null;
   const opts = {
@@ -100,7 +102,16 @@ async function newContext(browser, { proxy, hl, gl, google } = {}) {
     hasTouch: false,
     javaScriptEnabled: true,
   };
-  if (geoOpts && geoOpts.extraHTTPHeaders) opts.extraHTTPHeaders = geoOpts.extraHTTPHeaders;
+  const headers = geoOpts && geoOpts.extraHTTPHeaders ? { ...geoOpts.extraHTTPHeaders } : {};
+  const ch = require('./browserFlavor').chUa(flavorId, (ua.match(/Chrome\/(\d+)/) || [])[1] || 125);
+  if (ch) {
+    headers['sec-ch-ua'] = ch;
+  } else {
+    delete headers['sec-ch-ua'];
+    delete headers['sec-ch-ua-mobile'];
+    delete headers['sec-ch-ua-platform'];
+  }
+  if (Object.keys(headers).length) opts.extraHTTPHeaders = headers;
   if (proxy) opts.proxy = parseProxy(proxy);
   const context = await browser.newContext(opts);
   if (g) await context.addInitScript(g.googleInitScript, { langs: g.languageList(geoOpts && geoOpts.geo) });
@@ -108,7 +119,7 @@ async function newContext(browser, { proxy, hl, gl, google } = {}) {
   return context;
 }
 
-function workerKey({ proxy, hl, gl, google, disableHttp2 }) {
+function workerKey({ proxy, hl, gl, google, disableHttp2, browser: browserName }) {
   let host = 'direct';
   if (proxy) {
     try {
@@ -118,7 +129,8 @@ function workerKey({ proxy, hl, gl, google, disableHttp2 }) {
       host = 'proxy';
     }
   }
-  return `${host}|${disableHttp2 ? 'h1' : 'h2'}|${google ? 'g' : 'n'}|${hl || 'en'}|${gl || 'us'}`;
+  const flavorId = require('./browserFlavor').normalizeFlavor(browserName);
+  return `${flavorId}|${host}|${disableHttp2 ? 'h1' : 'h2'}|${google ? 'g' : 'n'}|${hl || 'en'}|${gl || 'us'}`;
 }
 
 async function checkout(opts) {
@@ -130,7 +142,7 @@ async function checkout(opts) {
     busyPages += 1;
     return w;
   }
-  const browser = await getBrowser({ disableHttp2 });
+  const browser = await getBrowser({ disableHttp2, browser: opts.browser });
   const context = await newContext(browser, opts);
   const page = await context.newPage();
   createdPages += 1;
@@ -168,7 +180,7 @@ async function checkin(w) {
 async function withBrowser(opts, fn) {
   await acquireSlot();
   try {
-    const browser = await getBrowser({ disableHttp2: !!opts.proxy });
+    const browser = await getBrowser({ disableHttp2: !!opts.proxy, browser: opts.browser });
     return await fn(browser);
   } finally {
     releaseSlot();

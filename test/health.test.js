@@ -42,6 +42,9 @@ test('health is public even when API_TOKEN is set', async () => {
   assert.equal(res.body.features.merge, true);
   assert.equal(res.body.features.circuit, true);
   assert.equal(res.body.features.cache, true);
+  assert.equal(res.body.features.browser_flavor, true);
+  assert.ok(Array.isArray(res.body.browsers));
+  assert.ok(res.body.browsers.some((b) => b.name === 'chromium'));
   assert.equal(res.body.pool.fetcher.url, undefined);
   assert.equal(typeof res.body.pool.proxies_available, 'number');
   assert.equal(typeof res.body.browser.browserConnected, 'boolean');

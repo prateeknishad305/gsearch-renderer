@@ -58,13 +58,7 @@ const ENDPOINTS = {
       hl: hl || 'en',
       gl: gl || 'us',
       start: String(s || 0),
-      pws: '0',
-      udm: '14',
       gbv: '2',
-      nfpr: '1',
-      filter: '0',
-      ie: 'UTF-8',
-      oe: 'UTF-8',
     });
     return `https://www.google.com/search?${p.toString()}`;
   },

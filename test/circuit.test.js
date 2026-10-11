@@ -44,5 +44,5 @@ test('google lite parser reads h3/url?q=', () => {
   const p = new URL(u).searchParams;
   assert.equal(p.get('gbv'), '2');
   assert.equal(p.get('start'), '10');
-  assert.equal(p.get('udm'), '14');
+  assert.equal(p.get('udm'), null);
 });

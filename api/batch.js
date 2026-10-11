@@ -69,6 +69,7 @@ module.exports = async (req, res) => {
     : Math.max(...engineList.map((e) => autoPageCount(e, num)));
   const hl = String(body.hl || 'en').slice(0, 8);
   const gl = String(body.gl || 'us').slice(0, 8);
+  const browser = require('./lib/browserFlavor').normalizeFlavor(body.browser);
   const useCache = body.nocache !== true;
   const cache = getCache();
 
@@ -81,7 +82,7 @@ module.exports = async (req, res) => {
       continue;
     }
 
-    const cacheKey = JSON.stringify(['v3', engineList.join(','), query, num, pagesGiven ? pages : 'auto', 0, hl, gl]);
+    const cacheKey = JSON.stringify(['v4', engineList.join(','), query, num, pagesGiven ? pages : 'auto', 0, hl, gl, browser]);
     if (useCache) {
       const hit = cache.get(cacheKey);
       if (hit) {
@@ -94,7 +95,7 @@ module.exports = async (req, res) => {
     let lastErr = new Error('no engine produced a result');
     for (const engine of engineList) {
       try {
-        const r = await searchEngine({ engine, query, num, pages, start: 0, hl, gl, autoPages, proxyless: !!body.proxyless });
+        const r = await searchEngine({ engine, query, num, pages, start: 0, hl, gl, autoPages, proxyless: !!body.proxyless, browser });
         settled = r;
         const item = {
           query,
@@ -108,6 +109,7 @@ module.exports = async (req, res) => {
           pages_fetched: r.pages_fetched,
           pages_requested: r.pages_requested,
           source: r.source,
+          browser,
         };
         out.push(item);
         if (useCache && r.results.length) {

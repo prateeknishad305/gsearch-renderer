@@ -25,6 +25,7 @@ module.exports = async (req, res) => {
     runtime: runtimeInfo(),
     engines: names(),
     pool: poolInfo(),
+    browsers: require('./lib/browserFlavor').listFlavors(),
     browser: browserStats(),
     cache: getCache().stats(),
     features: {
@@ -42,9 +43,10 @@ module.exports = async (req, res) => {
       circuit: true,
       lite_engines: true,
       google_fixes: require('./lib/google').FIXES.length,
-      google_udm: String(process.env.GOOGLE_UDM || '1') !== '0',
+      google_udm: String(process.env.GOOGLE_UDM || '0') === '1',
       google_sticky: String(process.env.GOOGLE_STICKY || '1') !== '0',
       proxy_kind: true,
+      browser_flavor: true,
     },
   });
 };

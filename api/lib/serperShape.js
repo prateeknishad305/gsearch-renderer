@@ -62,7 +62,8 @@ function parseSerperInput(req) {
   const type = String(body.type || (req.query && req.query.type) || 'search').toLowerCase();
   const engine = String(body.engine || (req.query && req.query.engine) || 'google').toLowerCase();
   const nocache = body.nocache === true || (req.query && req.query.nocache === '1');
-  return { q, gl, hl, num, page, type, engine, nocache };
+  const browser = require('./browserFlavor').normalizeFlavor(body.browser || (req.query && req.query.browser));
+  return { q, gl, hl, num, page, type, engine, nocache, browser };
 }
 
 module.exports = { hostOf, toOrganic, toSerperBody, parseSerperInput, fallbackEngines, SERPER_FALLBACKS };

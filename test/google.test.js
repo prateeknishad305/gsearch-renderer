@@ -13,7 +13,7 @@ test('google ships 100+ named fixes', () => {
   assert.equal(new Set(g.FIXES).size, g.FIXES.length);
 });
 
-test('google URL includes efficiency params and omits num=10', () => {
+test('google URL is classic search and omits num=10', () => {
   const u = ENGINES.google.url({ q: 'hello world', num: 100, start: 10, hl: 'en', gl: 'us' });
   const p = new URL(u).searchParams;
   assert.equal(p.get('q'), 'hello world');
@@ -21,11 +21,8 @@ test('google URL includes efficiency params and omits num=10', () => {
   assert.equal(p.get('start'), '10');
   assert.equal(p.get('hl'), 'en');
   assert.equal(p.get('gl'), 'us');
-  assert.equal(p.get('udm'), '14');
-  assert.equal(p.get('sourceid'), 'chrome');
-  assert.equal(p.get('ie'), 'UTF-8');
-  assert.equal(p.get('pws'), '0');
-  assert.equal(p.get('nfpr'), '1');
+  assert.equal(p.get('udm'), null);
+  assert.equal(p.get('sourceid'), null);
   assert.match(u, /^https:\/\/www\.google\.com\/search\?/);
 });
 
@@ -76,11 +73,15 @@ test('filterResults keeps unique http titles and google /url for followGoto', ()
 });
 
 test('asset blocker keeps document/script/stylesheet', () => {
+  const prev = process.env.GOOGLE_BLOCK_ASSETS;
+  process.env.GOOGLE_BLOCK_ASSETS = '1';
   assert.equal(g.shouldBlockRequest('https://www.google.com/search', 'document'), false);
   assert.equal(g.shouldBlockRequest('https://www.google.com/x.js', 'script'), false);
   assert.equal(g.shouldBlockRequest('https://www.google.com/x.css', 'stylesheet'), false);
   assert.equal(g.shouldBlockRequest('https://www.google.com/x.png', 'image'), true);
   assert.equal(g.shouldBlockRequest('https://www.googletagmanager.com/gtm.js', 'script'), true);
+  if (prev === undefined) delete process.env.GOOGLE_BLOCK_ASSETS;
+  else process.env.GOOGLE_BLOCK_ASSETS = prev;
 });
 
 test('sorry and soft-block detectors', () => {
@@ -141,9 +142,10 @@ test('one-nav lock serializes per IP', async () => {
   assert.equal(released, true);
 });
 
-test('cookies skip random CONSENT when sticky', () => {
-  const sticky = ENGINES.google.cookies({ sticky: true });
-  assert.equal(sticky.some((c) => c.name === 'CONSENT' && /YES\+cb/.test(c.value)), false);
+test('cookies set CONSENT and SOCS like pre-102', () => {
+  const list = ENGINES.google.cookies({ sticky: false });
+  assert.equal(list.some((c) => c.name === 'CONSENT' && /YES\+cb/.test(c.value)), true);
+  assert.equal(list.some((c) => c.name === 'SOCS' && c.value === 'CAI'), true);
 });
 
 test('pageParallel default off for google', () => {
