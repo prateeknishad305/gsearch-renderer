@@ -54,11 +54,19 @@ function autoPageCount(engine, num) {
 // Engines that have a plain-HTTP fast path. Turn the whole feature off with
 // env LITE_FAST=0, or skip per-engine with LITE_FAST_<ENGINE>=0.
 const LITE_ENGINES = new Set(Object.keys(ENDPOINTS));
+// Archive.org HTML SERP times out; Wikipedia OpenSearch is official JSON.
+const SKIP_RENDER = new Set(['archive', 'wikipedia']);
 function liteEnabled(engine) {
   return (
     LITE_ENGINES.has(engine) &&
     String(process.env.LITE_FAST || '1') !== '0' &&
     String(process.env[`LITE_FAST_${engine.toUpperCase()}`] || '1') !== '0'
+  );
+}
+function skipRender(engine) {
+  return (
+    SKIP_RENDER.has(engine) &&
+    String(process.env[`SKIP_RENDER_${engine.toUpperCase()}`] || '1') !== '0'
   );
 }
 
@@ -67,6 +75,59 @@ function liteEnabled(engine) {
 function isNetFail(err) {
   const m = String((err && err.message) || err || '');
   return /ERR_EMPTY_RESPONSE|ERR_CONNECTION|ERR_TUNNEL|ERR_SOCKS|ERR_TIMED_OUT|ERR_PROXY|ERR_HTTP2|net::ERR_|Navigation timeout|Timeout|ECONNRESET|ENOTFOUND/i.test(m);
+}
+
+function isHardBlock(err) {
+  const code = err && err.code;
+  return code === 'BLOCKED' || code === 'SORRY';
+}
+
+// Ordered engines to try after the requested engine(s) fail, so a caller always
+// gets usable results instead of a dead-end "unavailable" body. Override the
+// order with env AUTO_FALLBACK_ENGINES, or turn the whole feature off with
+// AUTO_FALLBACK=0.
+const AUTO_FALLBACK_CHAIN = String(
+  process.env.AUTO_FALLBACK_ENGINES ||
+    'duckduckgo,bing,wikipedia,archive,github,wiby,brave,yahoo,startpage,marginalia,mojeek,ecosia,qwant,yandex,google'
+)
+  .split(',')
+  .map((s) => s.trim().toLowerCase())
+  .filter((e) => ENGINES[e]);
+
+function autoFallbackEnabled() {
+  return String(process.env.AUTO_FALLBACK || '1') !== '0';
+}
+
+// Appends the fallback chain to an engine list, preserving order and dropping
+// duplicates. With AUTO_FALLBACK=0 the list is returned untouched.
+function withFallbacks(list) {
+  if (!autoFallbackEnabled()) return list.slice();
+  const out = list.slice();
+  const seen = new Set(out);
+  for (const e of AUTO_FALLBACK_CHAIN) {
+    if (!seen.has(e)) {
+      seen.add(e);
+      out.push(e);
+    }
+  }
+  return out;
+}
+
+// Codes that mean "this engine could not be fetched from here" rather than a
+// programming error. They are never surfaced verbatim to API callers.
+const UNAVAILABLE_CODES = new Set(['BLOCKED', 'SORRY', 'CIRCUIT_OPEN']);
+
+function publicCode(code) {
+  if (UNAVAILABLE_CODES.has(code)) return 'ENGINE_UNAVAILABLE';
+  return code || 'ERROR';
+}
+
+function publicMessage(engine, err) {
+  const code = err && err.code;
+  if (UNAVAILABLE_CODES.has(code) || code === 'LITE_EMPTY') {
+    return `Engine "${engine}" could not be reached from this network. No results were returned.`;
+  }
+  return (err && err.message) || 'Search failed';
 }
 
 function retryAttempts(dflt) {
@@ -170,19 +231,20 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
           pages_requested: pageCount,
         };
       }
-    } catch {
-      if (liteOnly) {
-        const e = new Error(`Engine "${engine}" lite path empty`);
-        e.code = 'LITE_EMPTY';
-        throw e;
-      }
-    }
-  }
-  if (liteOnly) {
-    const e = new Error(`Engine "${engine}" has no lite results`);
-    e.code = 'LITE_EMPTY';
-    throw e;
-  }
+     } catch (err) {
+       if (liteOnly || skipRender(engine) || (engine !== 'google' && isHardBlock(err))) {
+         if (err && err.code) throw err;
+         const e = new Error(`Engine "${engine}" lite path empty`);
+         e.code = 'LITE_EMPTY';
+         throw e;
+       }
+     }
+   }
+   if (liteOnly || skipRender(engine)) {
+     const e = new Error(`Engine "${engine}" has no lite results`);
+     e.code = 'LITE_EMPTY';
+     throw e;
+   }
 
   if (engine !== 'google' && circuit.isOpen(engine)) {
     const e = new Error(`Engine "${engine}" circuit open after repeated failures`);
@@ -231,8 +293,9 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
         err = caught;
         if (caught && caught.code === 'UNKNOWN_ENGINE') throw caught;
         if (engine === 'google') dropStickyGoogleProxy(stickyKey);
-        if (engine === 'google' && candidate && caught && (caught.code === 'BLOCKED' || caught.code === 'SORRY')) {
-          skipProxies = true;
+        if (isHardBlock(caught)) {
+          if (engine === 'google' && candidate) skipProxies = true;
+          else break;
         }
       }
     }
@@ -449,13 +512,17 @@ module.exports = async (req, res) => {
     return send(res, body);
   }
 
+  const requested = engineList[0];
+  const tryList = withFallbacks(engineList);
   let lastErr = new Error('no engine produced a result');
-  for (const engine of engineList) {
+  for (const engine of tryList) {
     try {
       const r = await searchEngine({ engine, query: q, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless, browser });
       const body = {
         engine,
-        engines_tried: engineList.slice(0, engineList.indexOf(engine) + 1),
+        requested_engine: requested,
+        fallback: engine !== requested,
+        engines_tried: tryList.slice(0, tryList.indexOf(engine) + 1),
         query: q,
         success: true,
         count: r.results.length,
@@ -481,19 +548,21 @@ module.exports = async (req, res) => {
   }
 
   stats.recordSearch({
-    engine: engineList[0],
+    engine: requested,
     ok: false,
     source: null,
     duration_ms: Date.now() - t0,
     code: lastErr.code || 'ERROR',
   });
   return send(res, {
-    engine: engineList[0],
-    engines_tried: engineList,
+    engine: requested,
+    requested_engine: requested,
+    fallback: false,
+    engines_tried: tryList,
     query: q,
     success: false,
-    code: lastErr.code || 'ERROR',
-    error: lastErr.message,
+    code: publicCode(lastErr.code),
+    error: publicMessage(requested, lastErr),
     count: 0,
     results: [],
     duration_ms: Date.now() - t0,
@@ -509,3 +578,8 @@ module.exports.perPageNum = perPageNum;
 module.exports.autoPageCount = autoPageCount;
 module.exports.GOOGLE_PAGE_SIZE = GOOGLE_PAGE_SIZE;
 module.exports.MAX_PAGES = MAX_PAGES;
+module.exports.withFallbacks = withFallbacks;
+module.exports.autoFallbackEnabled = autoFallbackEnabled;
+module.exports.AUTO_FALLBACK_CHAIN = AUTO_FALLBACK_CHAIN;
+module.exports.publicCode = publicCode;
+module.exports.publicMessage = publicMessage;

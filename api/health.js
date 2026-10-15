@@ -34,6 +34,7 @@ module.exports = async (req, res) => {
       serper_render: String(process.env.SERPER_RENDER || '0') === '1',
       cache: true,
       engine_fallback: true,
+      auto_fallback: String(process.env.AUTO_FALLBACK || '1') !== '0',
       pagination: true,
       batch: true,
       proxy_fetch: String(process.env.PROXY_FETCH || '1') !== '0',

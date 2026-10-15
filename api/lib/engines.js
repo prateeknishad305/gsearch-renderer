@@ -19,7 +19,9 @@ function parseGoogle() {
   }
   const isGoogleRel = (href) => /^\/(?:goto|url)\?/.test(href);
   const NAV_TOKENS = new Set([
-    'ai mode', 'all', 'images', 'videos', 'news', 'shopping', 'maps', 'books',
+    'ai mode', 'ai overview', 'ai overviews', 'try ai mode', 'search labs',
+    'show more', 'show all', 'ask follow up', 'ask a follow up',
+    'all', 'images', 'videos', 'news', 'shopping', 'maps', 'books',
     'forums', 'more', 'tools', 'settings', 'privacy', 'sign in', 'sign out',
     'web result', 'search results', 'learn more', 'help', 'terms', 'about',
     'advertising', 'business', 'feedback', 'cookies', 'search settings',
@@ -27,6 +29,15 @@ function parseGoogle() {
     'accessibility help', 'web', 'shopping', 'claim this knowledge panel',
     'sign in to customize', 'images', 'videos',
   ]);
+  const VIDEO_HOST = /(?:^|\.)(?:youtube\.com|youtu\.be|ytimg\.com|googlevideo\.com|ggpht\.com|youtube-nocookie\.com)$/i;
+  const AI_PREFIX = /^(?:ai\s+(?:mode|overview)\b|try\s+ai\s+mode\b)/i;
+  const isVideoHost = (url) => {
+    try {
+      return VIDEO_HOST.test(new URL(url, 'https://www.google.com').hostname);
+    } catch {
+      return false;
+    }
+  };
   const isGoogleHost = (url) => {
     try {
       const h = new URL(url).hostname;
@@ -57,9 +68,9 @@ function parseGoogle() {
 
   function push(title, rawHref, node, a) {
     const url = resolveUrl(rawHref);
-    if (!isGoogleRel(rawHref) && (!/^https?:\/\//i.test(url) || isGoogleHost(url))) return;
+    if (!isGoogleRel(rawHref) && (!/^https?:\/\//i.test(url) || isGoogleHost(url) || isVideoHost(url))) return;
     const key = url || rawHref;
-    if (!title || title.length < 3 || NAV_TOKENS.has(title.toLowerCase()) || seen.has(key)) return;
+    if (!title || title.length < 3 || NAV_TOKENS.has(title.toLowerCase()) || AI_PREFIX.test(title) || seen.has(key)) return;
     seen.add(key);
     results.push({ title, url: isGoogleRel(rawHref) ? rawHref : url, snippet: snippetOf(node, a) });
   }

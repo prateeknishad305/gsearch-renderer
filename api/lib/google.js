@@ -2,6 +2,7 @@
 
 const net = require('net');
 const { URL } = require('url');
+const { isGarbageUrl, isAiModeTitle } = require('./resultFilter');
 
 function envFlag(name, dflt) {
   const raw = process.env[name];
@@ -180,7 +181,7 @@ function isJunkUrl(url) {
     const h = parsed.hostname;
     if (/webcache\.googleusercontent\.com$/i.test(h)) return true;
     if (/(?:^|\.)gstatic\.com$|(?:^|\.)googleadservices\.com$|(?:^|\.)googleusercontent\.com$/i.test(h)) return true;
-    if (envFlag('GOOGLE_DROP_YOUTUBE', false) && /(?:^|\.)youtube\.com$/i.test(h)) return true;
+    if (isGarbageUrl(u)) return true;
     if (/(?:^|\.)google\.com$/i.test(h) && !/\/(?:url|goto)\?/i.test(u + parsed.pathname + parsed.search)) return true;
   } catch {
     return true;
@@ -481,6 +482,7 @@ function filterResults(results) {
   const seen = new Set();
   for (const r of results || []) {
     if (!r || !(r.title || '').trim()) continue;
+    if (isAiModeTitle(r.title)) continue;
     const raw = String(r.url || '');
     if (isJunkUrl(raw)) continue;
     const url = isGoogleRel(raw) ? raw : decodeHref(raw);
