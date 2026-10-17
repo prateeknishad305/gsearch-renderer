@@ -1,5 +1,7 @@
 'use strict';
 
+const crypto = require('node:crypto');
+
 function cors(res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -8,7 +10,14 @@ function cors(res) {
 
 function send(res, body, status = 200) {
   cors(res);
-  return res.status(body && body.http_status ? body.http_status : status).json(body);
+  const code = body && body.http_status ? body.http_status : status;
+  if (code === 200 && body && body.success === true && Array.isArray(body.results)) {
+    const json = JSON.stringify(body);
+    const etag = '"' + crypto.createHash('sha256').update(json).digest('hex').slice(0, 16) + '"';
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'private, max-age=60');
+  }
+  return res.status(code).json(body);
 }
 
 // When API_TOKEN is set, every request must present it either as

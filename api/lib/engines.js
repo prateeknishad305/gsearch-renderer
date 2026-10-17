@@ -569,12 +569,20 @@ function parseShodan() {
   }
   const results = [];
   const seen = new Set();
-  function push(title, url, snippet) {
-    const t = String(title || '').replace(/\s+/g, ' ').trim();
-    const u = asUrl(url);
+  function push(fields) {
+    const t = String(fields.title || '').replace(/\s+/g, ' ').trim();
+    const u = asUrl(fields.url);
     if (!t || t.length < 2 || !u || seen.has(u)) return;
     seen.add(u);
-    results.push({ title: t, url: u, snippet: String(snippet || '').replace(/\s+/g, ' ').trim() });
+    results.push({
+      title: t,
+      url: u,
+      snippet: String(fields.snippet || '').replace(/\s+/g, ' ').trim(),
+      ip: fields.ip || '',
+      ports: fields.ports || [],
+      hostnames: fields.hostnames || [],
+      org: fields.org || '',
+    });
   }
   const cards = document.querySelectorAll(
     '.result, .search-result, #results .card, div[data-id], a[href*="/host/"]'
@@ -585,18 +593,17 @@ function parseShodan() {
     const href = a.getAttribute('href') || '';
     const ip = hostHref(href) || (a.textContent || '').trim();
     const wrap = (el.tagName === 'A' ? a.closest('.result, .search-result, .card, div') : el) || a.parentElement;
-    const hostText = wrap
+    const hostnames = wrap
       ? Array.from(wrap.querySelectorAll('.hostnames li, .hostname, ul.hostnames li, a.host'))
           .map((n) => (n.textContent || '').trim())
-          .filter((s) => s && s.includes('.'))[0] || ''
-      : '';
+          .filter((s) => s && s.includes('.'))
+      : [];
     const ports = wrap
       ? Array.from(wrap.querySelectorAll('.ports li, a.port, .port, span.port'))
           .map((n) => (n.textContent || '').trim())
           .filter((s) => /^\d+$/.test(s))
           .slice(0, 12)
-          .join(', ')
-      : '';
+      : [];
     const extra = wrap
       ? Array.from(wrap.querySelectorAll('.org, .isp, .city, .country, .details, p'))
           .map((n) => (n.textContent || '').replace(/\s+/g, ' ').trim())
@@ -604,10 +611,12 @@ function parseShodan() {
           .slice(0, 2)
           .join(' · ')
       : '';
-    const title = hostText || ip;
-    const url = hostText || ip;
-    const snippet = [ip && ip !== title ? ip : '', ports ? `ports ${ports}` : '', extra].filter(Boolean).join(' · ');
-    push(title, url, snippet);
+    const title = hostnames[0] || ip;
+    const url = hostnames[0] || ip;
+    const snippet = [ip && ip !== title ? ip : '', ports.length ? `ports ${ports.join(', ')}` : '', extra]
+      .filter(Boolean)
+      .join(' · ');
+    push({ title, url, snippet, ip, ports, hostnames, org: extra });
   });
   return results;
 }

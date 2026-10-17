@@ -42,6 +42,7 @@ const proxiesHandler = require('./api/proxies');
 const enginesHandler = require('./api/engines');
 const statsHandler = require('./api/stats');
 const serperHandler = require('./api/serper');
+const shodanIpHandler = require('./api/shodanIp');
 
 const PORT = parseInt(process.env.PORT, 10) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -126,6 +127,7 @@ function route(pathname, method) {
   if (path === '/api/crawl' || path === '/crawl') return crawlHandler;
   if (path === '/api/proxies' || path === '/proxies') return proxiesHandler;
   if (path === '/api/engines' || path === '/engines') return enginesHandler;
+  if (path === '/api/shodan/ip' || path === '/shodan/ip') return shodanIpHandler;
   if (path === '/api/stats' || path === '/stats') return statsHandler;
   return null;
 }
@@ -147,6 +149,7 @@ async function handle(req, res) {
         crawl: 'GET /api/crawl?url=<https://example.com>',
         proxies: 'GET|POST|DELETE /api/proxies',
         engines: 'GET /api/engines',
+        shodan_ip: 'GET /api/shodan/ip?ips=1.2.3.4,5.6.7.8',
         stats: 'GET /api/stats',
         health: 'GET /api/health',
       },

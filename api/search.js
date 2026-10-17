@@ -21,6 +21,7 @@ const {
 } = require('./lib/proxyPool');
 const { getCache } = require('./lib/cache');
 const { send, cors, authOk, unauthorized, maskProxy } = require('./lib/http');
+const { parseShodanOptions, applyShodanOptions, active: shodanOptionsActive } = require('./lib/shodanQuery');
 const circuit = require('./lib/circuit');
 const stats = require('./lib/stats');
 const g = require('./lib/google');
@@ -96,6 +97,23 @@ const AUTO_FALLBACK_CHAIN = String(
 
 function autoFallbackEnabled() {
   return String(process.env.AUTO_FALLBACK || '1') !== '0';
+}
+
+// Per-request override: ?fallback=0 (or ?auto_fallback=0) disables the chain
+// for this call only, leaving the process-wide default untouched.
+function noFallbackRequested(query) {
+  if (!query) return false;
+  return (
+    query.fallback === '0' ||
+    query.fallback === 'false' ||
+    query.auto_fallback === '0' ||
+    query.auto_fallback === 'false'
+  );
+}
+
+function resolveTryList(engineList, query) {
+  const noFallback = noFallbackRequested(query);
+  return { noFallback, tryList: noFallback ? engineList.slice() : withFallbacks(engineList) };
 }
 
 // Appends the fallback chain to an engine list, preserving order and dropping
@@ -427,7 +445,7 @@ module.exports = async (req, res) => {
       service: 'gsearch-renderer',
       ok: true,
       usage:
-        'GET /api/search?q=<query>&engine=<name>  OR  engines=<name,name,...|&*>  mode=fallback|merge  num= pages= hl= gl= proxy= nocache= browser=chromium|firefox|edge|safari|brave|tor token=',
+        'GET /api/search?q=<query>&engine=<name>  OR  engines=<name,name,...|&*>  mode=fallback|merge  num= pages= hl= gl= proxy= nocache= browser=chromium|firefox|edge|safari|brave|tor  fallback=0  explain=1  token=  |  shodan: min_ports= has_vulns=1 sort=ports|vulns|ip fields=ip_str,port,hostnames  |  GET /api/shodan/ip?ips=1.2.3.4,5.6.7.8',
       engines: names(),
       pool: poolInfo(),
       note:
@@ -459,13 +477,29 @@ module.exports = async (req, res) => {
   const proxy = String(req.query.proxy || '').trim();
   const browser = require('./lib/browserFlavor').normalizeFlavor(req.query.browser || req.query.ua);
   const debug = req.query.debug === '1';
+  const explain = req.query.explain === '1';
   const proxyless = req.query.proxyless === '1' || req.query.proxyless === 'true';
   const mode = String(req.query.mode || 'fallback').toLowerCase() === 'merge' ? 'merge' : 'fallback';
-  const useCache = req.query.nocache !== '1' && !debug && !proxy && !proxyless;
+  const shodanOpts = parseShodanOptions(req.query);
+  const useCache = req.query.nocache !== '1' && !debug && !explain && !proxy && !proxyless;
   const t0 = Date.now();
 
   const cache = getCache();
-  const cacheKey = JSON.stringify(['v5', engineList.join(','), mode, q, num, pagesGiven ? pages : 'auto', start, hl, gl, proxyless ? 1 : 0, browser]);
+  const cacheKey = JSON.stringify([
+    'v6',
+    engineList.join(','),
+    mode,
+    q,
+    num,
+    pagesGiven ? pages : 'auto',
+    start,
+    hl,
+    gl,
+    proxyless ? 1 : 0,
+    browser,
+    noFallbackRequested(req.query) ? 1 : 0,
+    shodanOptionsActive(shodanOpts) ? shodanOpts : 0,
+  ]);
   if (useCache) {
     const hit = cache.get(cacheKey);
     if (hit) {
@@ -478,6 +512,9 @@ module.exports = async (req, res) => {
       engineList.map(async (engine) => {
         try {
           const r = await searchEngine({ engine, query: q, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless, browser });
+          if (shodanOptionsActive(shodanOpts)) {
+            r.results = applyShodanOptions(r.results, shodanOpts);
+          }
           return { engine, ok: true, r };
         } catch (err) {
           return { engine, ok: false, err };
@@ -500,7 +537,19 @@ module.exports = async (req, res) => {
       response_time_ms: Date.now() - t0,
       source: ok.map((s) => s.r.source).filter(Boolean).join(',') || 'none',
       browser,
+      auto_fallback: autoFallbackEnabled() && !noFallbackRequested(req.query),
     };
+    if (explain) {
+      body.diagnostics = {
+        mode: 'merge',
+        engines: settled.map((s) => ({
+          engine: s.engine,
+          success: !!(s.ok && s.r && s.r.results),
+          code: s.ok ? (s.r && s.r.results.length ? 'OK' : 'EMPTY_RESULTS') : publicCode(s.err && s.err.code),
+          duration_ms: s.ok && s.r ? s.r.duration_ms : null,
+        })),
+      };
+    }
     stats.recordSearch({
       engine: body.engine,
       ok: body.success,
@@ -513,11 +562,22 @@ module.exports = async (req, res) => {
   }
 
   const requested = engineList[0];
-  const tryList = withFallbacks(engineList);
+  const { noFallback, tryList } = resolveTryList(engineList, req.query);
+  const attemptsDetail = [];
   let lastErr = new Error('no engine produced a result');
   for (const engine of tryList) {
+    const startedAt = Date.now();
     try {
       const r = await searchEngine({ engine, query: q, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless, browser });
+      const results = shodanOptionsActive(shodanOpts)
+        ? applyShodanOptions(r.results, shodanOpts)
+        : r.results;
+      attemptsDetail.push({
+        engine,
+        success: results.length > 0,
+        code: results.length ? 'OK' : 'EMPTY_RESULTS',
+        duration_ms: r.duration_ms,
+      });
       const body = {
         engine,
         requested_engine: requested,
@@ -525,8 +585,8 @@ module.exports = async (req, res) => {
         engines_tried: tryList.slice(0, tryList.indexOf(engine) + 1),
         query: q,
         success: true,
-        count: r.results.length,
-        results: r.results,
+        count: results.length,
+        results,
         duration_ms: r.duration_ms,
         response_time_ms: Date.now() - t0,
         attempts: r.attempts,
@@ -535,11 +595,26 @@ module.exports = async (req, res) => {
         source: r.source,
         proxy: maskProxy(r.proxy),
         browser,
+        auto_fallback: !noFallback,
       };
+      if (explain) {
+        body.diagnostics = {
+          mode: 'fallback',
+          requested_engine: requested,
+          auto_fallback: !noFallback,
+          engines: attemptsDetail,
+        };
+      }
       stats.recordSearch({ engine, ok: true, source: r.source, duration_ms: Date.now() - t0, code: 'OK' });
-      if (useCache && r.results.length) cache.set(cacheKey, body);
+      if (useCache && results.length) cache.set(cacheKey, body);
       return send(res, body);
     } catch (err) {
+      attemptsDetail.push({
+        engine,
+        success: false,
+        code: publicCode(err && err.code),
+        duration_ms: Date.now() - startedAt,
+      });
       if (err && err.code === 'UNKNOWN_ENGINE') {
         return send(res, { error: err.message, http_status: 400, response_time_ms: Date.now() - t0 });
       }
@@ -554,7 +629,7 @@ module.exports = async (req, res) => {
     duration_ms: Date.now() - t0,
     code: lastErr.code || 'ERROR',
   });
-  return send(res, {
+  const failed = {
     engine: requested,
     requested_engine: requested,
     fallback: false,
@@ -567,7 +642,17 @@ module.exports = async (req, res) => {
     results: [],
     duration_ms: Date.now() - t0,
     response_time_ms: Date.now() - t0,
-  });
+    auto_fallback: !noFallback,
+  };
+  if (explain) {
+    failed.diagnostics = {
+      mode: 'fallback',
+      requested_engine: requested,
+      auto_fallback: !noFallback,
+      engines: attemptsDetail,
+    };
+  }
+  return send(res, failed);
 };
 
 module.exports.config = { maxDuration: 60, memory: 1024 };
@@ -580,6 +665,8 @@ module.exports.GOOGLE_PAGE_SIZE = GOOGLE_PAGE_SIZE;
 module.exports.MAX_PAGES = MAX_PAGES;
 module.exports.withFallbacks = withFallbacks;
 module.exports.autoFallbackEnabled = autoFallbackEnabled;
+module.exports.resolveTryList = resolveTryList;
+module.exports.noFallbackRequested = noFallbackRequested;
 module.exports.AUTO_FALLBACK_CHAIN = AUTO_FALLBACK_CHAIN;
 module.exports.publicCode = publicCode;
 module.exports.publicMessage = publicMessage;

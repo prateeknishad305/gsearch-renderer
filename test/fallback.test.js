@@ -8,6 +8,8 @@ const {
   AUTO_FALLBACK_CHAIN,
   publicCode,
   publicMessage,
+  resolveTryList,
+  noFallbackRequested,
 } = require('../api/search');
 const { ENGINES } = require('../api/lib/engines');
 
@@ -65,4 +67,30 @@ test('publicMessage never leaks block/sorry wording', () => {
   assert.match(msg, /google/);
   const plain = publicMessage('bing', new Error('boom'));
   assert.equal(plain, 'boom');
+});
+
+test('per-request fallback=0 disables the chain only for that call', () => {
+  const old = process.env.AUTO_FALLBACK;
+  delete process.env.AUTO_FALLBACK;
+  try {
+    const off = resolveTryList(['mojeek'], { fallback: '0' });
+    assert.equal(off.noFallback, true);
+    assert.deepEqual(off.tryList, ['mojeek']);
+
+    const on = resolveTryList(['mojeek'], {});
+    assert.equal(on.noFallback, false);
+    assert.ok(on.tryList.length > 1);
+    assert.equal(on.tryList[0], 'mojeek');
+  } finally {
+    if (old === undefined) delete process.env.AUTO_FALLBACK;
+    else process.env.AUTO_FALLBACK = old;
+  }
+});
+
+test('noFallbackRequested recognises false values and defaults to on', () => {
+  assert.equal(noFallbackRequested({ fallback: '0' }), true);
+  assert.equal(noFallbackRequested({ fallback: 'false' }), true);
+  assert.equal(noFallbackRequested({ auto_fallback: '0' }), true);
+  assert.equal(noFallbackRequested({}), false);
+  assert.equal(noFallbackRequested(undefined), false);
 });

@@ -2,6 +2,8 @@
 
 const { withPage } = require('./browserPool');
 const { ENGINES, detectBlock, resolveGoogleRedirects } = require('./engines');
+const { toShodanHost } = require('./shodanShape');
+const { enrichShodanHosts } = require('./internetdb');
 const g = require('./google');
 const session = require('./googleSession');
 const ip = require('./googleIp');
@@ -171,6 +173,16 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug, pr
     clean = clean.slice(0, num);
   }
 
+  if (engine === 'shodan') {
+    clean = clean.map((r) => ({ ...r, host: toShodanHost(r) }));
+    if (process.env.INTERNETDB !== '0') {
+      await enrichShodanHosts(clean, {
+        timeout: intEnv('INTERNETDB_TIMEOUT', 4000),
+        limit: num,
+      });
+    }
+  }
+
   if (clean.length === 0) {
     let excerpt = '';
     if (!navError) {
@@ -206,7 +218,11 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug, pr
   let debugHtml = '';
   if (debug && !navError) {
     debugHtml = await page
-      .evaluate(() => {
+      .evaluate((eng) => {
+        if (eng === 'shodan') {
+          const main = document.querySelector('#search, main, .container') || document.body;
+          return (main ? main.innerHTML : '').replace(/\s+/g, ' ').slice(0, 6000);
+        }
         const el = document.querySelector('#search, #rso, #main');
         if (!el) return '';
         const cards = [];
@@ -216,7 +232,7 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug, pr
           if (c) cards.push(c.outerHTML.replace(/\s+/g, ' ').slice(0, 5000));
         }
         return JSON.stringify({ full: el.innerHTML.replace(/\s+/g, ' ').slice(0, 4000), cards });
-      })
+      }, engine)
       .catch(() => '');
   }
 
