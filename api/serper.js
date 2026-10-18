@@ -6,6 +6,8 @@ const { getCache } = require('./lib/cache');
 const { send, cors, authOk } = require('./lib/http');
 const stats = require('./lib/stats');
 const { toSerperBody, parseSerperInput, fallbackEngines } = require('./lib/serperShape');
+const { applyDomainFilters } = require('./lib/resultFilter');
+const { parseDork, adaptQuery, dedupeResults } = require('./lib/dork');
 
 function usage() {
   return {
@@ -77,9 +79,12 @@ module.exports = async (req, res) => {
 
   async function tryOne(engine, liteOnly) {
     if (!ENGINES[engine]) return null;
+    const dorkInfo = parseDork(input.q);
+    const dorkMode = dorkInfo.has_operators;
+    const query = dorkMode ? adaptQuery(input.q, engine) : input.q;
     const r = await searchEngine({
       engine,
-      query: input.q,
+      query,
       num: input.num,
       pages: engine === input.engine ? pages : 1,
       start: engine === input.engine ? start : 0,
@@ -90,6 +95,12 @@ module.exports = async (req, res) => {
       browser: input.browser,
     });
     if (!r || !r.results || !r.results.length) return null;
+    let results = applyDomainFilters(r.results, {
+      ...(dorkMode ? { social: true, dev: true } : {}),
+      ...(dorkInfo.site_targets.length ? { allowDomains: dorkInfo.site_targets } : {}),
+    });
+    if (dorkMode) results = dedupeResults(results, input.num);
+    if (!results.length) return null;
     const out = toSerperBody({
       q: input.q,
       gl: input.gl,
@@ -98,7 +109,7 @@ module.exports = async (req, res) => {
       page: input.page,
       type: input.type,
       engine: input.engine,
-      results: r.results,
+      results,
       durationMs: Date.now() - t0,
     });
     if (!out.organic.length) return null;

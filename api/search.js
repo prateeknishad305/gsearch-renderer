@@ -22,6 +22,8 @@ const {
 const { getCache } = require('./lib/cache');
 const { send, cors, authOk, unauthorized, maskProxy } = require('./lib/http');
 const { parseShodanOptions, applyShodanOptions, active: shodanOptionsActive } = require('./lib/shodanQuery');
+const { parseResultFilters, applyDomainFilters } = require('./lib/resultFilter');
+const { parseDork, engineSupport, adaptQuery, dedupeResults } = require('./lib/dork');
 const circuit = require('./lib/circuit');
 const stats = require('./lib/stats');
 const g = require('./lib/google');
@@ -445,7 +447,7 @@ module.exports = async (req, res) => {
       service: 'gsearch-renderer',
       ok: true,
       usage:
-        'GET /api/search?q=<query>&engine=<name>  OR  engines=<name,name,...|&*>  mode=fallback|merge  num= pages= hl= gl= proxy= nocache= browser=chromium|firefox|edge|safari|brave|tor  fallback=0  explain=1  token=  |  shodan: min_ports= has_vulns=1 sort=ports|vulns|ip fields=ip_str,port,hostnames  |  GET /api/shodan/ip?ips=1.2.3.4,5.6.7.8',
+        'GET /api/search?q=<query>&engine=<name>  OR  engines=<name,name,...|&*>  mode=fallback|merge  num= pages= hl= gl= proxy= nocache= browser=chromium|firefox|edge|safari|brave|tor  fallback=0  explain=1  unique=1  exclude=social,dev  exclude_domains=a.com,b.com  dork=1  dedupe=1  token=  |  shodan: min_ports= has_vulns=1 sort=ports|vulns|ip fields=ip_str,port,hostnames  |  GET /api/shodan/ip?ips=1.2.3.4,5.6.7.8',
       engines: names(),
       pool: poolInfo(),
       note:
@@ -481,12 +483,35 @@ module.exports = async (req, res) => {
   const proxyless = req.query.proxyless === '1' || req.query.proxyless === 'true';
   const mode = String(req.query.mode || 'fallback').toLowerCase() === 'merge' ? 'merge' : 'fallback';
   const shodanOpts = parseShodanOptions(req.query);
+  const dorkInfo = parseDork(q);
+  const dorkMode = req.query.dork === '1' || (dorkInfo.has_operators && req.query.dork !== '0');
+  const wantDedupe = dorkMode || req.query.dedupe === '1';
+  const resultFilters = parseResultFilters(req.query);
+  if (dorkMode) {
+    if (resultFilters.social === undefined) resultFilters.social = true;
+    if (resultFilters.dev === undefined) resultFilters.dev = true;
+  }
+  if (dorkInfo.site_targets.length) {
+    resultFilters.allowDomains = Array.from(
+      new Set([...(resultFilters.allowDomains || []), ...dorkInfo.site_targets])
+    );
+  }
   const useCache = req.query.nocache !== '1' && !debug && !explain && !proxy && !proxyless;
   const t0 = Date.now();
 
+  function dorkBody(engine) {
+    if (!dorkMode) return undefined;
+    return {
+      enabled: true,
+      operators: dorkInfo.operators,
+      site_targets: dorkInfo.site_targets,
+      engine_support: engineSupport(engine, dorkInfo),
+    };
+  }
+
   const cache = getCache();
   const cacheKey = JSON.stringify([
-    'v6',
+    'v7',
     engineList.join(','),
     mode,
     q,
@@ -499,6 +524,9 @@ module.exports = async (req, res) => {
     browser,
     noFallbackRequested(req.query) ? 1 : 0,
     shodanOptionsActive(shodanOpts) ? shodanOpts : 0,
+    dorkMode ? 1 : 0,
+    wantDedupe ? 1 : 0,
+    resultFilters,
   ]);
   if (useCache) {
     const hit = cache.get(cacheKey);
@@ -511,10 +539,13 @@ module.exports = async (req, res) => {
     const settled = await Promise.all(
       engineList.map(async (engine) => {
         try {
-          const r = await searchEngine({ engine, query: q, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless, browser });
-          if (shodanOptionsActive(shodanOpts)) {
-            r.results = applyShodanOptions(r.results, shodanOpts);
-          }
+          const engineQuery = dorkMode ? adaptQuery(q, engine) : q;
+          const r = await searchEngine({ engine, query: engineQuery, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless, browser });
+          let results = shodanOptionsActive(shodanOpts)
+            ? applyShodanOptions(r.results, shodanOpts)
+            : r.results;
+          results = applyDomainFilters(results, resultFilters);
+          r.results = results;
           return { engine, ok: true, r };
         } catch (err) {
           return { engine, ok: false, err };
@@ -522,7 +553,8 @@ module.exports = async (req, res) => {
       })
     );
     const ok = settled.filter((s) => s.ok && s.r && s.r.results && s.r.results.length);
-    const results = mergeUnique(ok.map((s) => s.r.results), num);
+    let results = mergeUnique(ok.map((s) => s.r.results), num);
+    if (wantDedupe) results = dedupeResults(results, num);
     const duration = Math.max(0, ...ok.map((s) => s.r.duration_ms || 0));
     const body = {
       engine: ok.length ? ok.map((s) => s.engine).join(',') : engineList[0],
@@ -538,6 +570,8 @@ module.exports = async (req, res) => {
       source: ok.map((s) => s.r.source).filter(Boolean).join(',') || 'none',
       browser,
       auto_fallback: autoFallbackEnabled() && !noFallbackRequested(req.query),
+      dork: dorkBody(ok.length ? ok[0].engine : engineList[0]),
+      dedupe: wantDedupe,
     };
     if (explain) {
       body.diagnostics = {
@@ -568,10 +602,13 @@ module.exports = async (req, res) => {
   for (const engine of tryList) {
     const startedAt = Date.now();
     try {
-      const r = await searchEngine({ engine, query: q, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless, browser });
-      const results = shodanOptionsActive(shodanOpts)
+      const engineQuery = dorkMode ? adaptQuery(q, engine) : q;
+      const r = await searchEngine({ engine, query: engineQuery, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless, browser });
+      let results = shodanOptionsActive(shodanOpts)
         ? applyShodanOptions(r.results, shodanOpts)
         : r.results;
+      results = applyDomainFilters(results, resultFilters);
+      if (wantDedupe) results = dedupeResults(results, num);
       attemptsDetail.push({
         engine,
         success: results.length > 0,
@@ -596,6 +633,8 @@ module.exports = async (req, res) => {
         proxy: maskProxy(r.proxy),
         browser,
         auto_fallback: !noFallback,
+        dork: dorkBody(engine),
+        dedupe: wantDedupe,
       };
       if (explain) {
         body.diagnostics = {
@@ -643,6 +682,8 @@ module.exports = async (req, res) => {
     duration_ms: Date.now() - t0,
     response_time_ms: Date.now() - t0,
     auto_fallback: !noFallback,
+    dork: dorkBody(requested),
+    dedupe: wantDedupe,
   };
   if (explain) {
     failed.diagnostics = {
