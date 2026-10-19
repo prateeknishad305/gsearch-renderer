@@ -138,6 +138,60 @@ function canonicalUrl(url) {
   }
 }
 
+function hostMatchesSite(host, target) {
+  const h = String(host || '')
+    .toLowerCase()
+    .replace(/^www\./, '');
+  const t = String(target || '')
+    .toLowerCase()
+    .replace(/^www\./, '');
+  if (!h || !t) return false;
+  return h === t || h.endsWith(`.${t}`);
+}
+
+function enforceDork(results, dorkInfo) {
+  if (!Array.isArray(results) || !dorkInfo) return results;
+  let out = results;
+
+  const sites = dorkInfo.site_targets || [];
+  if (sites.length) {
+    out = out.filter((r) => {
+      try {
+        return sites.some((s) => hostMatchesSite(new URL(r.url).hostname, s));
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  const filetypes = []
+    .concat(dorkInfo.operators && dorkInfo.operators.filetype)
+    .concat(dorkInfo.operators && dorkInfo.operators.ext)
+    .concat(dorkInfo.operators && dorkInfo.operators.mime)
+    .filter(Boolean)
+    .map((v) => String(v).replace(/^\./, '').toLowerCase());
+  if (filetypes.length) {
+    out = out.filter((r) => {
+      try {
+        const path = new URL(r.url).pathname.toLowerCase();
+        return filetypes.some((ext) => path.endsWith(`.${ext}`));
+      } catch {
+        return false;
+      }
+    });
+  }
+
+  const inurls = (dorkInfo.operators && dorkInfo.operators.inurl) || [];
+  if (inurls.length) {
+    out = out.filter((r) => {
+      const u = String(r && r.url || '').toLowerCase();
+      return inurls.every((tok) => u.includes(String(tok).toLowerCase()));
+    });
+  }
+
+  return out;
+}
+
 function dedupeResults(list, cap) {
   const seen = new Set();
   const out = [];
@@ -157,5 +211,7 @@ module.exports = {
   adaptQuery,
   canonicalUrl,
   dedupeResults,
+  enforceDork,
+  hostMatchesSite,
   CAPABILITY,
 };

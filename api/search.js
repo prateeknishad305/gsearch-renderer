@@ -23,7 +23,7 @@ const { getCache } = require('./lib/cache');
 const { send, cors, authOk, unauthorized, maskProxy } = require('./lib/http');
 const { parseShodanOptions, applyShodanOptions, active: shodanOptionsActive } = require('./lib/shodanQuery');
 const { parseResultFilters, applyDomainFilters } = require('./lib/resultFilter');
-const { parseDork, engineSupport, adaptQuery, dedupeResults } = require('./lib/dork');
+const { parseDork, engineSupport, adaptQuery, dedupeResults, enforceDork } = require('./lib/dork');
 const circuit = require('./lib/circuit');
 const stats = require('./lib/stats');
 const g = require('./lib/google');
@@ -511,7 +511,7 @@ module.exports = async (req, res) => {
 
   const cache = getCache();
   const cacheKey = JSON.stringify([
-    'v7',
+    'v8',
     engineList.join(','),
     mode,
     q,
@@ -545,6 +545,7 @@ module.exports = async (req, res) => {
             ? applyShodanOptions(r.results, shodanOpts)
             : r.results;
           results = applyDomainFilters(results, resultFilters);
+          if (dorkMode) results = enforceDork(results, dorkInfo);
           r.results = results;
           return { engine, ok: true, r };
         } catch (err) {
@@ -608,7 +609,22 @@ module.exports = async (req, res) => {
         ? applyShodanOptions(r.results, shodanOpts)
         : r.results;
       results = applyDomainFilters(results, resultFilters);
+      if (dorkMode) results = enforceDork(results, dorkInfo);
       if (wantDedupe) results = dedupeResults(results, num);
+      if (
+        results.length === 0 &&
+        dorkMode &&
+        (dorkInfo.site_targets.length || (dorkInfo.operators.filetype || []).length)
+      ) {
+        attemptsDetail.push({
+          engine,
+          success: false,
+          code: 'EMPTY_RESULTS',
+          duration_ms: r.duration_ms,
+        });
+        lastErr = Object.assign(new Error('No results matched dork constraints'), { code: 'EMPTY_RESULTS' });
+        continue;
+      }
       attemptsDetail.push({
         engine,
         success: results.length > 0,

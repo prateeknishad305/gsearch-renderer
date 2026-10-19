@@ -3,6 +3,7 @@
 const net = require('net');
 const { URL } = require('url');
 const { isGarbageUrl, isAiModeTitle } = require('./resultFilter');
+const { parseDork } = require('./dork');
 
 function envFlag(name, dflt) {
   const raw = process.env[name];
@@ -116,6 +117,8 @@ function buildSearchUrl({ q, num, start, hl, gl, proxy, viewport }) {
   p.set('q', query);
   p.set('hl', geo.hl);
   p.set('gl', geo.gl);
+  const siteTargets = parseDork(query).site_targets;
+  if (siteTargets.length === 1) p.set('as_sitesearch', siteTargets[0]);
   const st = Math.max(0, Number(start) || 0);
   p.set('start', String(st));
   const n = Math.min(10, Math.max(1, Number(num) || 10));
@@ -515,7 +518,7 @@ const FIXES = [
   'languages_geo', 'referer_page2', 'cache_ok', 'nav_12s', 'post_delay_80',
   'sticky_cookies_skip', 'country_plus_param', 'cc_param', 'filter_youtube_host',
   'filter_gstatic', 'filter_adsvc', '429_block', '403_block', 'empty_h3_soft',
-  'hl_from_proxy',
+  'hl_from_proxy', 'as_sitesearch',
 ];
 
 module.exports = {

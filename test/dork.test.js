@@ -8,6 +8,8 @@ const {
   adaptQuery,
   canonicalUrl,
   dedupeResults,
+  enforceDork,
+  hostMatchesSite,
 } = require('../api/lib/dork');
 
 test('parseDork detects operators, phrases and exclusions', () => {
@@ -63,6 +65,32 @@ test('canonicalUrl strips fragments, tracking params and trailing slashes', () =
     'https://example.com/a?id=2'
   );
   assert.equal(canonicalUrl('not a url'), 'not a url');
+});
+
+test('hostMatchesSite accepts subdomains of the target', () => {
+  assert.equal(hostMatchesSite('pages.github.com', 'github.com'), true);
+  assert.equal(hostMatchesSite('github.com', 'github.com'), true);
+  assert.equal(hostMatchesSite('openai.com', 'github.com'), false);
+  assert.equal(hostMatchesSite('notgithub.com', 'github.com'), false);
+});
+
+test('enforceDork drops results outside site: and filetype:', () => {
+  const info = parseDork('site:github.com filetype:md "readme"');
+  const rows = [
+    { url: 'https://github.com/org/repo/blob/main/README.md', title: 'ok' },
+    { url: 'https://pages.github.com/x/README.md', title: 'sub' },
+    { url: 'https://openai.com/index', title: 'offsite' },
+    { url: 'https://github.com/org/repo', title: 'noext' },
+    { url: 'https://wikipedia.org/wiki/GitHub', title: 'wiki' },
+  ];
+  const out = enforceDork(rows, info);
+  assert.deepEqual(out.map((r) => r.title), ['ok', 'sub']);
+});
+
+test('enforceDork keeps results when there is no site constraint', () => {
+  const info = parseDork('intitle:admin');
+  const rows = [{ url: 'https://example.com/login', title: 'x' }];
+  assert.equal(enforceDork(rows, info).length, 1);
 });
 
 test('dedupeResults removes canonical duplicates and respects cap', () => {
