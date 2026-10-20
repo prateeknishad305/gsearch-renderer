@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 
-const { shardPool, splitPool } = require('../api/lib/proxyPool');
+const { shardPool, splitPool, uniqueHosts } = require('../api/lib/proxyPool');
 const { TtlCache } = require('../api/lib/cache');
 const { maskProxy, authOk } = require('../api/lib/http');
 
@@ -51,6 +51,18 @@ test('shardPool partitions disjointly and covers everything', () => {
 
 test('shardPool with total<=1 returns the whole pool', () => {
   assert.deepStrictEqual(shardPool(['a', 'b'], 0, 1), ['a', 'b']);
+});
+
+test('uniqueHosts keeps one exit per IP so fail rotates the host', () => {
+  assert.deepStrictEqual(
+    uniqueHosts([
+      'http://88.117.251.48:80',
+      'http://88.117.251.48:8080',
+      'socks5://88.117.251.48:1080',
+      'http://1.2.3.4:9999',
+    ]),
+    ['http://88.117.251.48:80', 'http://1.2.3.4:9999']
+  );
 });
 
 test('TtlCache returns values, expires, and refreshes LRU', () => {

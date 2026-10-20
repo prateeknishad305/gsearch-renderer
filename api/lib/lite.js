@@ -580,7 +580,9 @@ async function fetchViaProxyFollow(url, proxyUrl, timeoutMs, hops = 2) {
 }
 
 function raceProxyFetch(url, engine, timeoutMs, n) {
-  const pool = liveProxies().sort(() => Math.random() - 0.5).slice(0, n);
+  const { raceWidth } = require('./proxyRace');
+  const width = n || raceWidth();
+  const pool = liveProxies().sort(() => Math.random() - 0.5).slice(0, width);
   if (!pool.length) return Promise.reject(new Error('no proxies'));
   return new Promise((resolve, reject) => {
     let pending = pool.length;
@@ -636,7 +638,7 @@ async function fetchLitePage(url, engine) {
   };
   if (engine === 'google') {
     try {
-      return await raceProxyFetch(url, engine, 2200, 3);
+      return await raceProxyFetch(url, engine, 2200);
     } catch {
       /* DC race failed — fall through to direct IP */
     }
@@ -652,7 +654,7 @@ async function fetchLitePage(url, engine) {
     return await fetchDirect(url, engine, headers);
   } catch (directErr) {
     try {
-      return await raceProxyFetch(url, engine, 4000, 3);
+      return await raceProxyFetch(url, engine, 4000);
     } catch {
       const e = new Error(`Lite fetch failed: ${directErr.message}`);
       e.code = directErr.code || 'LITE_FETCH_ERROR';

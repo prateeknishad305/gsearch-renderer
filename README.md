@@ -91,7 +91,7 @@ curl http://localhost:3000/api/proxies
 curl -X DELETE http://localhost:3000/api/proxies
 ```
 
-`POST` replaces the personal list (max `USER_PROXY_MAX`, default `50`). `DELETE` clears it and falls back to `PROXY_POOL` / live checked proxies. Search, batch, and crawl pick from this pool.
+`POST` replaces the personal list (max `USER_PROXY_MAX`, default `10000`). `DELETE` clears it and falls back to `PROXY_POOL` / live checked proxies. Search, batch, and crawl pick from this pool.
 
 ### `GET /api/engines`
 

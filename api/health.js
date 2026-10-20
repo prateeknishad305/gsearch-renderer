@@ -52,6 +52,7 @@ module.exports = async (req, res) => {
       google_sticky: String(process.env.GOOGLE_STICKY || '1') !== '0',
       proxy_kind: true,
       browser_flavor: true,
+      proxy_race: Math.min(16, Math.max(1, parseInt(process.env.PROXY_RACE || '4', 10) || 4)),
     },
   });
 };

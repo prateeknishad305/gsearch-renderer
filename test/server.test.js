@@ -11,6 +11,7 @@ const proxiesHandler = require('../api/proxies');
 const enginesHandler = require('../api/engines');
 const statsHandler = require('../api/stats');
 const serperHandler = require('../api/serper');
+const cacheHandler = require('../api/cache');
 
 test('route maps search, batch, health, crawl, proxies and aliases', () => {
   assert.equal(route('/api/search'), searchHandler);
@@ -28,6 +29,8 @@ test('route maps search, batch, health, crawl, proxies and aliases', () => {
   assert.equal(route('/engines'), enginesHandler);
   assert.equal(route('/api/stats'), statsHandler);
   assert.equal(route('/stats'), statsHandler);
+  assert.equal(route('/api/cache'), cacheHandler);
+  assert.equal(route('/cache'), cacheHandler);
   assert.equal(route('/nope'), null);
   assert.equal(route('/search', 'POST'), serperHandler);
   assert.equal(route('/api/serper', 'GET'), serperHandler);

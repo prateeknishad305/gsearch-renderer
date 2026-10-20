@@ -129,6 +129,20 @@ test('circuit does not skip the direct exit', () => {
   ip.reset();
 });
 
+test('failing one port skips every port on that host', () => {
+  ip.reset();
+  const a = 'http://88.117.251.48:8080';
+  const b = 'http://88.117.251.48:1080';
+  const c = 'http://1.2.3.4:8080';
+  for (let i = 0; i < ip.openAfter(); i++) ip.record(a, 'ERROR');
+  assert.equal(ip.shouldSkip(a), true);
+  assert.equal(ip.shouldSkip(b), true);
+  assert.equal(ip.shouldSkip(c), false);
+  assert.equal(g.proxyKey(a), g.proxyKey(b));
+  assert.equal(g.proxyKey(a), '88.117.251.48');
+  ip.reset();
+});
+
 test('session sticky expires after N uses', () => {
   session.reset();
   const p = 'http://u:p@exit.example:8080';

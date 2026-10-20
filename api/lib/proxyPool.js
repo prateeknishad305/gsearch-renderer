@@ -70,7 +70,7 @@ function filePool() {
   return [];
 }
 
-const MAX_USER_PROXIES = Math.min(100, Math.max(1, parseInt(process.env.USER_PROXY_MAX || '50', 10) || 50));
+const MAX_USER_PROXIES = Math.min(10000, Math.max(1, parseInt(process.env.USER_PROXY_MAX || '10000', 10) || 10000));
 let userPool = [];
 
 function getUserProxies() {
@@ -137,6 +137,27 @@ function proxyIdentity(p) {
   } catch {
     return String(p);
   }
+}
+
+function proxyHost(p) {
+  if (!p) return 'direct';
+  try {
+    return (new URL(p).hostname || '').toLowerCase() || 'direct';
+  } catch {
+    return String(p);
+  }
+}
+
+function uniqueHosts(list) {
+  const out = [];
+  const seen = new Set();
+  for (const p of Array.isArray(list) ? list : []) {
+    const h = proxyHost(p);
+    if (seen.has(h)) continue;
+    seen.add(h);
+    out.push(p);
+  }
+  return out;
 }
 
 const RESI_HOST = /resi|residential|isp\b|mobile|4g|5g|rotat|sticky|peer|soax|brightdata|oxylabs|smartproxy|iproyal|packetstream|netnut|rayobyte|luminati|geonode|proxyempire|evomi|ipidea/i;
@@ -310,6 +331,8 @@ module.exports = {
   altProxy,
   SOCKS_PORTS,
   proxyIdentity,
+  proxyHost,
+  uniqueHosts,
   takeGoogleProxy,
   takeStickyGoogleProxy,
   peekStickyGoogleProxy,

@@ -204,9 +204,9 @@ function proxyKey(proxy) {
   if (!proxy) return 'direct';
   try {
     const u = new URL(proxy);
-    return `${u.protocol}//${u.hostname}:${u.port || ''}`;
+    return (u.hostname || '').toLowerCase() || 'direct';
   } catch {
-    return String(proxy).replace(/\/\/[^@/]*@/, '//***@');
+    return String(proxy);
   }
 }
 

@@ -64,4 +64,8 @@ function reset() {
   for (const k of Object.keys(engines)) delete engines[k];
 }
 
-module.exports = { isOpen, record, snapshot, reset, OPEN_AFTER, OPEN_MS };
+function resetEngine(engine) {
+  if (engine) delete engines[engine];
+}
+
+module.exports = { isOpen, record, snapshot, reset, resetEngine, OPEN_AFTER, OPEN_MS };

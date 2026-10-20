@@ -18,6 +18,7 @@ const {
   otherProxyPool,
   classifyProxy,
   partitionPool,
+  uniqueHosts,
 } = require('./lib/proxyPool');
 const { getCache } = require('./lib/cache');
 const { send, cors, authOk, unauthorized, maskProxy } = require('./lib/http');
@@ -28,6 +29,7 @@ const circuit = require('./lib/circuit');
 const stats = require('./lib/stats');
 const g = require('./lib/google');
 const googleIp = require('./lib/googleIp');
+const proxyRace = require('./lib/proxyRace');
 
 const MAX_NUM = 100;
 const MAX_PAGES = 10;
@@ -175,7 +177,7 @@ function buildGoogleTries(explicitProxy, stickyKey) {
       /* ignore */
     }
   }
-  let pool = googleProxyPool(getShardPool()).map((p) => g.preferHttp(p));
+  let pool = uniqueHosts(googleProxyPool(getShardPool()).map((p) => g.preferHttp(p)));
   pool = googleIp.pickOpen(pool);
   const tries = [];
   const seen = new Set();
@@ -189,7 +191,7 @@ function buildGoogleTries(explicitProxy, stickyKey) {
       seen.add(proxyIdentity(one));
     }
   }
-  const max = Math.min(pool.length, retryAttempts(intEnv('GOOGLE_PROXY_ATTEMPTS', intEnv('PROXY_ATTEMPTS', 6))));
+  const max = Math.min(pool.length, retryAttempts(intEnv('GOOGLE_PROXY_ATTEMPTS', intEnv('PROXY_ATTEMPTS', 8))));
   while (tries.length < max) {
     const next = takeGoogleProxy(pool, seen);
     if (!next) break;
@@ -214,9 +216,9 @@ function buildTries(explicitProxy, proxyless, engine, stickyKey) {
   } catch {
     /* ignore */
   }
-  const pool = otherProxyPool(getShardPool()).sort(() => Math.random() - 0.5);
+  const pool = uniqueHosts(otherProxyPool(getShardPool()).sort(() => Math.random() - 0.5));
   const user = getUserProxies().length > 0;
-  const picks = Math.min(pool.length, retryAttempts(intEnv('PROXY_ATTEMPTS', user ? 1 : 2)));
+  const picks = Math.min(pool.length, retryAttempts(intEnv('PROXY_ATTEMPTS', user ? 8 : 4)));
   const tries = [];
   for (const p of pool.slice(0, picks)) {
     tries.push(p);
@@ -290,31 +292,61 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
     let err = lastErr;
     const candidates = buildTries(proxy, proxyless, engine, stickyKey);
     let skipProxies = false;
-    for (const candidate of candidates) {
-      if (Date.now() > deadline) break;
-      if (skipProxies && candidate) continue;
-      if (engine === 'google' && googleIp.shouldSkip(candidate)) continue;
+    const width = proxyRace.raceWidth();
+
+    async function attempt(candidate) {
+      if (Date.now() > deadline) {
+        const e = new Error('deadline');
+        e.code = 'TIMEOUT';
+        throw e;
+      }
+      if (skipProxies && candidate) {
+        const e = new Error('skip proxy');
+        e.code = 'SKIP';
+        throw e;
+      }
+      if (candidate && googleIp.shouldSkip(candidate)) {
+        const e = new Error('exit cooling down');
+        e.code = 'CIRCUIT_OPEN';
+        throw e;
+      }
       if (engine === 'google' && candidate) {
         const ok = await g.probeProxy(candidate);
         if (!ok) {
           googleIp.record(candidate, 'ERROR');
-          continue;
+          const e = new Error('probe failed');
+          e.code = 'ERROR';
+          throw e;
         }
       }
       localAttempts += 1;
       try {
-          const r = await runQuery({ engine, query, num: perPage, start: offset, hl, gl, proxy: candidate, debug, browser });
-        pageResults = r.results;
-        dur = r.duration_ms;
-        used = candidate;
-        if (engine === 'google' && candidate) setStickyGoogleProxy(stickyKey, candidate);
+        const r = await runQuery({ engine, query, num: perPage, start: offset, hl, gl, proxy: candidate, debug, browser });
+        if (candidate) googleIp.record(candidate, 'OK');
+        return { pageResults: r.results, used: candidate, dur: r.duration_ms };
+      } catch (caught) {
+        if (candidate && engine !== 'google') googleIp.record(candidate, (caught && caught.code) || 'ERROR');
+        throw caught;
+      }
+    }
+
+    for (const group of proxyRace.batches(candidates, width)) {
+      if (Date.now() > deadline) break;
+      const batch = skipProxies ? group.filter((c) => !c) : group;
+      if (!batch.length) continue;
+      try {
+        const win = await proxyRace.firstOk(batch.map((c) => () => attempt(c)));
+        pageResults = win.pageResults;
+        used = win.used;
+        dur = win.dur;
+        if (engine === 'google' && used) setStickyGoogleProxy(stickyKey, used);
         break;
       } catch (caught) {
         err = caught;
         if (caught && caught.code === 'UNKNOWN_ENGINE') throw caught;
         if (engine === 'google') dropStickyGoogleProxy(stickyKey);
         if (isHardBlock(caught)) {
-          if (engine === 'google' && candidate) skipProxies = true;
+          if (engine === 'google') skipProxies = true;
           else break;
         }
       }
