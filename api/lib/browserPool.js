@@ -7,7 +7,14 @@ function intEnv(name, dflt) {
   return Number.isFinite(v) && v > 0 ? v : dflt;
 }
 
-const IDLE_MS = intEnv('BROWSER_IDLE_MS', 120000);
+function intEnvZero(name, dflt) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return dflt;
+  const v = parseInt(raw, 10);
+  return Number.isFinite(v) && v >= 0 ? v : dflt;
+}
+
+const IDLE_MS = intEnvZero('BROWSER_IDLE_MS', 0);
 const serverless = !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.AWS_EXECUTION_ENV);
 const WORKERS = intEnv('BROWSER_WORKERS', intEnv('MAX_CONTEXTS', serverless ? 1 : 4));
 const MAX_CONTEXTS = WORKERS;
@@ -23,12 +30,38 @@ function reuseOn() {
   return String(process.env.BROWSER_REUSE || '1') !== '0';
 }
 
+function pageReuse() {
+  return String(process.env.PAGE_REUSE || '0') === '1';
+}
+
+const SLOT_WAIT_MS = intEnvZero('SLOT_WAIT_MS', 8000);
+
 async function acquireSlot() {
   if (active < MAX_CONTEXTS) {
     active += 1;
     return;
   }
-  await new Promise((resolve) => waiters.push(resolve));
+  await new Promise((resolve, reject) => {
+    let settled = false;
+    const waiter = () => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve();
+    };
+    const timer = SLOT_WAIT_MS
+      ? setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          const i = waiters.indexOf(waiter);
+          if (i >= 0) waiters.splice(i, 1);
+          const e = new Error('browser workers busy');
+          e.code = 'QUEUE_TIMEOUT';
+          reject(e);
+        }, SLOT_WAIT_MS)
+      : null;
+    waiters.push(waiter);
+  });
   active += 1;
 }
 
@@ -39,6 +72,7 @@ function releaseSlot() {
 }
 
 function scheduleIdleClose(key, entry) {
+  if (!IDLE_MS) return;
   if (entry.timer) clearTimeout(entry.timer);
   entry.timer = setTimeout(() => {
     if (cache.get(key) !== entry) return;
@@ -89,7 +123,7 @@ async function getBrowser({ disableHttp2 = false, browser: browserName } = {}) {
   return browser;
 }
 
-async function newContext(browser, { proxy, hl, gl, google, browser: browserName } = {}) {
+async function newContext(browser, { proxy, hl, gl, google, browser: browserName, javascript } = {}) {
   const flavorId = require('./browserFlavor').normalizeFlavor(browserName);
   const ua = await resolveUA(browser, DESKTOP_UA, flavorId);
   const g = google ? require('./google') : null;
@@ -101,7 +135,7 @@ async function newContext(browser, { proxy, hl, gl, google, browser: browserName
     viewport: (geoOpts && geoOpts.viewport) || { width: 1366, height: 768 },
     colorScheme: 'light',
     hasTouch: false,
-    javaScriptEnabled: true,
+    javaScriptEnabled: javascript !== false,
   };
   const headers = geoOpts && geoOpts.extraHTTPHeaders ? { ...geoOpts.extraHTTPHeaders } : {};
   const ch = require('./browserFlavor').chUa(flavorId, (ua.match(/Chrome\/(\d+)/) || [])[1] || 125);
@@ -120,7 +154,7 @@ async function newContext(browser, { proxy, hl, gl, google, browser: browserName
   return context;
 }
 
-function workerKey({ proxy, hl, gl, google, disableHttp2, browser: browserName }) {
+function workerKey({ proxy, hl, gl, google, disableHttp2, browser: browserName, javascript }) {
   let host = 'direct';
   if (proxy) {
     try {
@@ -131,7 +165,7 @@ function workerKey({ proxy, hl, gl, google, disableHttp2, browser: browserName }
     }
   }
   const flavorId = require('./browserFlavor').normalizeFlavor(browserName);
-  return `${flavorId}|${host}|${disableHttp2 ? 'h1' : 'h2'}|${google ? 'g' : 'n'}|${hl || 'en'}|${gl || 'us'}`;
+  return `${flavorId}|${host}|${disableHttp2 ? 'h1' : 'h2'}|${google ? 'g' : 'n'}|${javascript === false ? 'noj' : 'js'}|${hl || 'en'}|${gl || 'us'}`;
 }
 
 async function checkout(opts) {
@@ -160,7 +194,7 @@ async function destroyWorker(w) {
 
 async function checkin(w) {
   busyPages = Math.max(0, busyPages - 1);
-  if (!w || !w.page || w.page.isClosed() || !reuseOn()) {
+  if (!w || !w.page || w.page.isClosed() || !reuseOn() || !pageReuse()) {
     if (w) await destroyWorker(w);
     return;
   }
@@ -176,6 +210,11 @@ async function checkin(w) {
   } catch {
     await destroyWorker(w);
   }
+}
+
+async function sweepIdle() {
+  const leftover = idle.splice(0, idle.length);
+  for (const w of leftover) await destroyWorker(w);
 }
 
 async function withBrowser(opts, fn) {
@@ -236,6 +275,10 @@ function stats() {
   const connected = browserConnected();
   return {
     reuse: reuseOn(),
+    page_reuse: pageReuse(),
+    always_on: reuseOn() && IDLE_MS === 0,
+    idle_close_ms: IDLE_MS,
+    slot_wait_ms: SLOT_WAIT_MS,
     max_contexts: MAX_CONTEXTS,
     workers: WORKERS,
     active,
@@ -247,6 +290,20 @@ function stats() {
     busyPages,
     createdPages,
   };
+}
+
+async function warm() {
+  if (serverless || !reuseOn()) return false;
+  try {
+    await Promise.all([
+      getBrowser({ disableHttp2: true }),
+      getBrowser({ disableHttp2: false }),
+    ]);
+    return true;
+  } catch (err) {
+    console.error('[gsearch-renderer] chromium warm failed:', (err && err.message) || err);
+    return false;
+  }
 }
 
 async function closeAll() {
@@ -269,6 +326,9 @@ module.exports = {
   withBrowser,
   withPage,
   stats,
+  warm,
+  warmup: warm,
+  sweepIdle,
   closeAll,
   browserConnected,
 };

@@ -21,7 +21,7 @@ module.exports = async (req, res) => {
     return {
       name,
       lite: !!ENDPOINTS[name],
-      page_size: name === 'google' || name === 'yahoo' ? 10 : null,
+      page_size: name === 'google' || name === 'google_lite' || name === 'chrome' || name === 'yahoo' ? 10 : null,
       ready: cfg.ready || null,
       circuit: circ[name] || { ok: 0, blocked: 0, empty: 0, error: 0, open: false },
     };

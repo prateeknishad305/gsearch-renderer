@@ -9,6 +9,8 @@ const {
   poolInfo,
   intEnv,
   altProxy,
+  chromiumProxyOk,
+  toChromiumProxy,
   takeGoogleProxy,
   peekStickyGoogleProxy,
   setStickyGoogleProxy,
@@ -21,6 +23,7 @@ const {
   uniqueHosts,
 } = require('./lib/proxyPool');
 const { getCache } = require('./lib/cache');
+const { sweepIdle } = require('./lib/browserPool');
 const { send, cors, authOk, unauthorized, maskProxy } = require('./lib/http');
 const { parseShodanOptions, applyShodanOptions, active: shodanOptionsActive } = require('./lib/shodanQuery');
 const { parseResultFilters, applyDomainFilters } = require('./lib/resultFilter');
@@ -35,7 +38,7 @@ const MAX_NUM = 100;
 const MAX_PAGES = 10;
 const MAX_QUERY_LEN = 512;
 const GOOGLE_PAGE_SIZE = 10;
-const FIXED_PAGE_SIZE = { google: 10, yahoo: 10 };
+const FIXED_PAGE_SIZE = { google: 10, google_lite: 10, chrome: 10, yahoo: 10 };
 
 // Google removed &num=100 (10 organic hits/page). Yahoo also ignores n>10 and
 // serves ~7-10. Paginate those with start=0,10,20,... Other engines keep a
@@ -92,8 +95,7 @@ function isHardBlock(err) {
 // order with env AUTO_FALLBACK_ENGINES, or turn the whole feature off with
 // AUTO_FALLBACK=0.
 const AUTO_FALLBACK_CHAIN = String(
-  process.env.AUTO_FALLBACK_ENGINES ||
-    'duckduckgo,bing,wikipedia,archive,github,wiby,brave,yahoo,startpage,marginalia,mojeek,ecosia,qwant,yandex,google'
+  process.env.AUTO_FALLBACK_ENGINES || 'duckduckgo,bing'
 )
   .split(',')
   .map((s) => s.trim().toLowerCase())
@@ -117,14 +119,33 @@ function noFallbackRequested(query) {
 
 function resolveTryList(engineList, query) {
   const noFallback = noFallbackRequested(query);
-  return { noFallback, tryList: noFallback ? engineList.slice() : withFallbacks(engineList) };
+  if (noFallback) return { noFallback, tryList: engineList.slice() };
+  return { noFallback, tryList: withFallbacks(engineList) };
 }
 
 // Appends the fallback chain to an engine list, preserving order and dropping
 // duplicates. With AUTO_FALLBACK=0 the list is returned untouched.
-function withFallbacks(list) {
-  if (!autoFallbackEnabled()) return list.slice();
+function fallbackDelayMs() {
+  const v = parseInt(process.env.GOOGLE_FALLBACK_DELAY_MS, 10);
+  if (Number.isFinite(v) && v >= 0) return v;
+  return 1500;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function withGoogleLiteFallback(list) {
   const out = list.slice();
+  if (!out.includes('google_lite') || out.includes('chrome')) return out;
+  const i = out.indexOf('google_lite');
+  out.splice(i + 1, 0, 'chrome');
+  return out;
+}
+
+function withFallbacks(list) {
+  const out = withGoogleLiteFallback(list);
+  if (!autoFallbackEnabled()) return out;
   const seen = new Set(out);
   for (const e of AUTO_FALLBACK_CHAIN) {
     if (!seen.has(e)) {
@@ -137,7 +158,7 @@ function withFallbacks(list) {
 
 // Codes that mean "this engine could not be fetched from here" rather than a
 // programming error. They are never surfaced verbatim to API callers.
-const UNAVAILABLE_CODES = new Set(['BLOCKED', 'SORRY', 'CIRCUIT_OPEN']);
+  const UNAVAILABLE_CODES = new Set(['BLOCKED', 'SORRY', 'CIRCUIT_OPEN', 'NO_ATTEMPT', 'QUEUE_TIMEOUT', 'TIMEOUT']);
 
 function publicCode(code) {
   if (UNAVAILABLE_CODES.has(code)) return 'ENGINE_UNAVAILABLE';
@@ -164,7 +185,13 @@ function retryAttempts(dflt) {
 function requestTimeoutMs() {
   const v = parseInt(process.env.REQUEST_TIMEOUT, 10);
   if (Number.isFinite(v) && v > 0) return v;
-  return intEnv('PROXY_WINDOW_MS', 28000);
+  return intEnv('PROXY_WINDOW_MS', 18000);
+}
+
+function searchBudgetMs() {
+  const v = parseInt(process.env.SEARCH_BUDGET_MS, 10);
+  if (Number.isFinite(v) && v > 0) return v;
+  return requestTimeoutMs();
 }
 
 function buildGoogleTries(explicitProxy, stickyKey) {
@@ -200,13 +227,16 @@ function buildGoogleTries(explicitProxy, stickyKey) {
     seen.add(id);
     tries.push(next);
   }
-  const fallbackDirect = String(process.env.PROXY_FALLBACK_DIRECT || '1') !== '0';
-  if (fallbackDirect && !tries.includes(null)) tries.push(null);
-  return tries.length ? tries : [null];
+  const usable = tries.map(toChromiumProxy).filter((p) => p == null || chromiumProxyOk(p));
+  const user = getUserProxies().length > 0;
+  const hasResi = usable.some((p) => classifyProxy(p) === 'residential') || partitionPool(pool).residential.length > 0;
+  const fallbackDirect = String(process.env.PROXY_FALLBACK_DIRECT || '1') !== '0' && !user && !hasResi;
+  if (fallbackDirect && !usable.includes(null)) usable.push(null);
+  return usable.length ? usable : [null];
 }
 
 function buildTries(explicitProxy, proxyless, engine, stickyKey) {
-  const google = engine === 'google';
+  const google = isGoogleEngine(engine);
   if (proxyless) return [null];
   if (google) return buildGoogleTries(explicitProxy, stickyKey);
   if (explicitProxy) return [explicitProxy];
@@ -225,22 +255,35 @@ function buildTries(explicitProxy, proxyless, engine, stickyKey) {
     const alt = altProxy(p);
     if (alt && !tries.includes(alt)) tries.push(alt);
   }
+  const usable = tries.map(toChromiumProxy).filter((p) => p == null || chromiumProxyOk(p));
   const fallbackDirect = String(process.env.PROXY_FALLBACK_DIRECT || '1') !== '0';
-  if (fallbackDirect || tries.length === 0) tries.push(null);
-  return tries;
+  if (fallbackDirect || usable.length === 0) usable.push(null);
+  return usable;
 }
 
 // Runs one engine, optionally across multiple result pages, merging unique URLs.
 // autoPages=true keeps fetching until `num` unique URLs (or MAX_PAGES).
-async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en', gl = 'us', proxy, debug, autoPages = false, proxyless = false, liteOnly = false, browser }) {
+async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en', gl = 'us', proxy, debug, autoPages = false, proxyless = false, liteOnly = false, renderOnly = false, browser, deadlineAt }) {
   const pageCount = Math.min(Math.max(1, pages), MAX_PAGES);
   const step = pageStep(engine, num);
   const perPage = perPageNum(engine, num);
   const cap = Math.min(MAX_NUM, autoPages ? Math.max(num, 1) : num * pageCount);
 
-  if (!debug && liteEnabled(engine)) {
+  if (engine === 'google_lite') liteOnly = true;
+  if (engine === 'chrome') renderOnly = true;
+
+  const deadline = Math.min(
+    Date.now() + requestTimeoutMs(),
+    deadlineAt || Date.now() + requestTimeoutMs()
+  );
+
+  const tryLite = !renderOnly && (liteOnly || engine === 'google' || (!debug && liteEnabled(engine)));
+  let liteAttempted = false;
+  if (tryLite && Date.now() + 2500 < deadline) {
+    liteAttempted = true;
     try {
-      const lite = await fastLiteSearch({ engine, query, num: cap, hl, gl, start });
+      const liteEngine = engine === 'google' ? 'google_lite' : engine;
+      const lite = await fastLiteSearch({ engine: liteEngine, query, num: cap, hl, gl, start });
       if (lite.results && lite.results.length) {
         circuit.record(engine, 'OK');
         return {
@@ -254,7 +297,7 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
         };
       }
      } catch (err) {
-       if (liteOnly || skipRender(engine) || (engine !== 'google' && isHardBlock(err))) {
+        if (liteOnly || skipRender(engine) || (!isGoogleEngine(engine) && isHardBlock(err))) {
          if (err && err.code) throw err;
          const e = new Error(`Engine "${engine}" lite path empty`);
          e.code = 'LITE_EMPTY';
@@ -267,14 +310,17 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
      e.code = 'LITE_EMPTY';
      throw e;
    }
+   if (liteAttempted && engine === 'google') {
+     const pause = fallbackDelayMs();
+     if (pause && Date.now() + pause + 1500 < deadline) await sleep(pause);
+   }
 
-  if (engine !== 'google' && circuit.isOpen(engine)) {
+  if (!isGoogleEngine(engine) && circuit.isOpen(engine)) {
     const e = new Error(`Engine "${engine}" circuit open after repeated failures`);
     e.code = 'CIRCUIT_OPEN';
     throw e;
   }
 
-  const deadline = Date.now() + requestTimeoutMs() * pageCount;
   const merged = [];
   const seen = new Set();
   let attempts = 0;
@@ -282,7 +328,7 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
   let proxyUsed = null;
   let duration = 0;
   let lastErr = new Error('no search attempt could be made');
-  const stickyKey = engine === 'google' ? `g:${query}|${hl}|${gl}` : '';
+  const stickyKey = isGoogleEngine(engine) ? `g:${query}|${hl}|${gl}` : '';
 
   async function fetchPage(offset) {
     let pageResults = null;
@@ -291,10 +337,20 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
     let localAttempts = 0;
     let err = lastErr;
     const candidates = buildTries(proxy, proxyless, engine, stickyKey);
+    if (!candidates.length) {
+      const e = new Error('no usable proxy or direct exit');
+      e.code = 'NO_ATTEMPT';
+      return { pageResults: null, used: null, dur: 0, localAttempts: 0, err: e };
+    }
     let skipProxies = false;
     const width = proxyRace.raceWidth();
 
-    async function attempt(candidate) {
+    async function attempt(candidate, signal) {
+      if (signal && signal.aborted) {
+        const e = new Error('race lost');
+        e.code = 'SKIP';
+        throw e;
+      }
       if (Date.now() > deadline) {
         const e = new Error('deadline');
         e.code = 'TIMEOUT';
@@ -310,7 +366,12 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
         e.code = 'CIRCUIT_OPEN';
         throw e;
       }
-      if (engine === 'google' && candidate) {
+      if (candidate && !chromiumProxyOk(candidate)) {
+        const e = new Error('skip socks5 auth');
+        e.code = 'SKIP';
+        throw e;
+      }
+      if (isGoogleEngine(engine) && candidate) {
         const ok = await g.probeProxy(candidate);
         if (!ok) {
           googleIp.record(candidate, 'ERROR');
@@ -325,7 +386,7 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
         if (candidate) googleIp.record(candidate, 'OK');
         return { pageResults: r.results, used: candidate, dur: r.duration_ms };
       } catch (caught) {
-        if (candidate && engine !== 'google') googleIp.record(candidate, (caught && caught.code) || 'ERROR');
+        if (candidate && !isGoogleEngine(engine)) googleIp.record(candidate, (caught && caught.code) || 'ERROR');
         throw caught;
       }
     }
@@ -335,18 +396,18 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
       const batch = skipProxies ? group.filter((c) => !c) : group;
       if (!batch.length) continue;
       try {
-        const win = await proxyRace.firstOk(batch.map((c) => () => attempt(c)));
+        const win = await proxyRace.firstOk(batch.map((c) => (signal) => attempt(c, signal)));
         pageResults = win.pageResults;
         used = win.used;
         dur = win.dur;
-        if (engine === 'google' && used) setStickyGoogleProxy(stickyKey, used);
+        if (isGoogleEngine(engine) && used) setStickyGoogleProxy(stickyKey, used);
         break;
       } catch (caught) {
         err = caught;
         if (caught && caught.code === 'UNKNOWN_ENGINE') throw caught;
-        if (engine === 'google') dropStickyGoogleProxy(stickyKey);
+        if (isGoogleEngine(engine)) dropStickyGoogleProxy(stickyKey);
         if (isHardBlock(caught)) {
-          if (engine === 'google') skipProxies = true;
+          if (isGoogleEngine(engine)) skipProxies = true;
           else break;
         }
       }
@@ -368,13 +429,18 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
         }
       }
     }
-    return { pageResults, used, dur, localAttempts, err };
+     if (!pageResults && localAttempts === 0) {
+       const e = new Error(Date.now() > deadline ? 'search budget exhausted' : 'no search attempt could be made');
+       e.code = Date.now() > deadline ? 'TIMEOUT' : 'NO_ATTEMPT';
+       err = e;
+     }
+     return { pageResults, used, dur, localAttempts, err };
   }
 
   const parallel =
     pageCount > 1 &&
     String(process.env.PAGE_PARALLEL || '1') !== '0' &&
-    (engine !== 'google' || g.pageParallel());
+    (!isGoogleEngine(engine) || g.pageParallel());
   if (parallel) {
     const jobs = [];
     for (let i = 0; i < pageCount; i++) jobs.push(fetchPage(start + i * step));
@@ -439,11 +505,24 @@ async function renderSearch(opts) {
   return searchEngine({ pages: 1, ...opts });
 }
 
+const ALL_SEARCH_ENGINES = ['google', 'duckduckgo', 'bing'];
+
 function parseEngineList(req) {
   const raw = req.query.engines ? String(req.query.engines) : String(req.query.engine || 'google');
-  if (raw.trim() === '*' || raw.trim().toLowerCase() === 'all') return names();
+  if (raw.trim() === '*' || raw.trim().toLowerCase() === 'all') return ALL_SEARCH_ENGINES.slice();
   const list = raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-  return list.length ? list : ['google'];
+  return list.length ? list.map(aliasEngine) : ['google'];
+}
+
+function aliasEngine(name) {
+  const n = String(name || '').toLowerCase();
+  if (n === 'googlelite' || n === 'google-lite' || n === 'glite') return 'google_lite';
+  if (n === 'chromium') return 'chrome';
+  return n;
+}
+
+function isGoogleEngine(engine) {
+  return engine === 'google' || engine === 'google_lite' || engine === 'chrome';
 }
 
 function mergeUnique(lists, cap) {
@@ -460,7 +539,7 @@ function mergeUnique(lists, cap) {
   return out;
 }
 
-module.exports = async (req, res) => {
+async function handleSearch(req, res) {
   if (req.method === 'OPTIONS') {
     cors(res);
     return res.status(204).end();
@@ -513,6 +592,8 @@ module.exports = async (req, res) => {
   const debug = req.query.debug === '1';
   const explain = req.query.explain === '1';
   const proxyless = req.query.proxyless === '1' || req.query.proxyless === 'true';
+  const liteOnly = req.query.lite === '1' || req.query.source === 'lite';
+  const renderOnly = req.query.render === '1' || req.query.source === 'render';
   const mode = String(req.query.mode || 'fallback').toLowerCase() === 'merge' ? 'merge' : 'fallback';
   const shodanOpts = parseShodanOptions(req.query);
   const dorkInfo = parseDork(q);
@@ -553,6 +634,8 @@ module.exports = async (req, res) => {
     hl,
     gl,
     proxyless ? 1 : 0,
+    liteOnly ? 1 : 0,
+    renderOnly ? 1 : 0,
     browser,
     noFallbackRequested(req.query) ? 1 : 0,
     shodanOptionsActive(shodanOpts) ? shodanOpts : 0,
@@ -572,7 +655,7 @@ module.exports = async (req, res) => {
       engineList.map(async (engine) => {
         try {
           const engineQuery = dorkMode ? adaptQuery(q, engine) : q;
-          const r = await searchEngine({ engine, query: engineQuery, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless, browser });
+          const r = await searchEngine({ engine, query: engineQuery, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless, liteOnly, renderOnly, browser, deadlineAt: Date.now() + searchBudgetMs() });
           let results = shodanOptionsActive(shodanOpts)
             ? applyShodanOptions(r.results, shodanOpts)
             : r.results;
@@ -632,11 +715,19 @@ module.exports = async (req, res) => {
   const { noFallback, tryList } = resolveTryList(engineList, req.query);
   const attemptsDetail = [];
   let lastErr = new Error('no engine produced a result');
+  const deadlineAt = Date.now() + searchBudgetMs();
+  let prevEngine = null;
   for (const engine of tryList) {
+    if (Date.now() >= deadlineAt - 1500) break;
+    if (prevEngine === 'google_lite' && engine === 'chrome') {
+      const pause = fallbackDelayMs();
+      if (pause && Date.now() + pause + 1500 < deadlineAt) await sleep(pause);
+    }
+    prevEngine = engine;
     const startedAt = Date.now();
     try {
       const engineQuery = dorkMode ? adaptQuery(q, engine) : q;
-      const r = await searchEngine({ engine, query: engineQuery, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless, browser });
+      const r = await searchEngine({ engine, query: engineQuery, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless, liteOnly, renderOnly, browser, deadlineAt });
       let results = shodanOptionsActive(shodanOpts)
         ? applyShodanOptions(r.results, shodanOpts)
         : r.results;
@@ -742,6 +833,15 @@ module.exports = async (req, res) => {
     };
   }
   return send(res, failed);
+}
+
+module.exports = async (req, res) => {
+  try {
+    return await handleSearch(req, res);
+  } finally {
+    const q = req && req.query ? String(req.query.q || '').trim() : '';
+    if (q) await sweepIdle().catch(() => {});
+  }
 };
 
 module.exports.config = { maxDuration: 60, memory: 1024 };
@@ -759,3 +859,9 @@ module.exports.noFallbackRequested = noFallbackRequested;
 module.exports.AUTO_FALLBACK_CHAIN = AUTO_FALLBACK_CHAIN;
 module.exports.publicCode = publicCode;
 module.exports.publicMessage = publicMessage;
+module.exports.aliasEngine = aliasEngine;
+module.exports.isGoogleEngine = isGoogleEngine;
+module.exports.parseEngineList = parseEngineList;
+module.exports.ALL_SEARCH_ENGINES = ALL_SEARCH_ENGINES;
+module.exports.withGoogleLiteFallback = withGoogleLiteFallback;
+module.exports.fallbackDelayMs = fallbackDelayMs;

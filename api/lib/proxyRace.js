@@ -22,12 +22,14 @@ function firstOk(fns) {
     let pending = fns.length;
     let done = false;
     let lastErr = null;
+    const ac = typeof AbortController === 'function' ? new AbortController() : null;
     for (const fn of fns) {
       Promise.resolve()
-        .then(fn)
+        .then(() => fn(ac && ac.signal))
         .then((val) => {
           if (done) return;
           done = true;
+          if (ac) ac.abort();
           resolve(val);
         })
         .catch((err) => {

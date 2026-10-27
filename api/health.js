@@ -31,6 +31,7 @@ module.exports = async (req, res) => {
     features: {
       lite_fast: String(process.env.LITE_FAST || '1') !== '0',
       browser_reuse: String(process.env.BROWSER_REUSE || '1') !== '0',
+      browser_always_on: browserStats().always_on,
       serper_render: String(process.env.SERPER_RENDER || '0') === '1',
       cache: true,
       engine_fallback: true,
@@ -53,6 +54,8 @@ module.exports = async (req, res) => {
       proxy_kind: true,
       browser_flavor: true,
       proxy_race: Math.min(16, Math.max(1, parseInt(process.env.PROXY_RACE || '4', 10) || 4)),
+      chrome_fetch: String(process.env.CHROME_FETCH || '1') !== '0',
+      batch_concurrency: Math.min(16, Math.max(1, parseInt(process.env.BATCH_CONCURRENCY || '6', 10) || 6)),
     },
   });
 };

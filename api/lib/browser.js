@@ -123,11 +123,17 @@ async function newSearchContext({ proxy }) {
 function parseProxy(proxy) {
   try {
     const u = new URL(proxy);
+    if (/^socks/i.test(u.protocol) && (u.username || u.password)) {
+      const err = new Error('Browser does not support socks5 proxy authentication');
+      err.code = 'SKIP';
+      throw err;
+    }
     const out = { server: `${u.protocol}//${u.host}` };
     if (u.username) out.username = decodeURIComponent(u.username);
     if (u.password) out.password = decodeURIComponent(u.password);
     return out;
-  } catch {
+  } catch (err) {
+    if (err && err.code === 'SKIP') throw err;
     return { server: proxy };
   }
 }

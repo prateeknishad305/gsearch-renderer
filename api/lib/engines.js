@@ -797,6 +797,32 @@ const ENGINES = {
     },
     ready: 'h3',
     scroll: 0,
+      parse: parseGoogle,
+  },
+  google_lite: {
+    url: ({ q, num, start, hl, gl, proxy }) => {
+      const g = require('./google');
+      return g.buildSearchUrl({ q, num, start, hl, gl, proxy });
+    },
+    cookies: ({ sticky } = {}) => {
+      const g = require('./google');
+      return g.cookiesFor({ sticky });
+    },
+    ready: 'h3',
+    scroll: 0,
+    parse: parseGoogle,
+  },
+  chrome: {
+    url: ({ q, num, start, hl, gl, proxy }) => {
+      const g = require('./google');
+      return g.buildSearchUrl({ q, num, start, hl, gl, proxy });
+    },
+    cookies: ({ sticky } = {}) => {
+      const g = require('./google');
+      return g.cookiesFor({ sticky });
+    },
+    ready: 'h3',
+    scroll: 0,
     parse: parseGoogle,
   },
   bing: {
@@ -986,6 +1012,8 @@ function detectBlock(engine) {
 
   const resultSelectors = {
     google: 'h3',
+    google_lite: 'h3',
+    chrome: 'h3',
     bing: 'li.b_algo',
     brave: '.snippet a.l1, .result-wrapper a.l1, .snippet a[href^="http"]',
      mojeek: 'ul.results-standard li a.ob, ul.results-standard li h2 a, a.ob[href^="http"]',
@@ -1008,7 +1036,7 @@ function detectBlock(engine) {
   const hasResults = !!document.querySelector(resultSelectors[engine] || 'html');
 
   const STORE_NAME = {
-    google: 'Google', bing: 'Bing', brave: 'Brave', mojeek: 'Mojeek',
+    google: 'Google', google_lite: 'Google Lite', chrome: 'Chrome', bing: 'Bing', brave: 'Brave', mojeek: 'Mojeek',
     startpage: 'Startpage', yahoo: 'Yahoo', duckduckgo: 'DuckDuckGo',
      duckduckgo_lite: 'DuckDuckGo', qwant: 'Qwant',
      ecosia: 'Ecosia', swisscows: 'Swisscows', seznam: 'Seznam', yandex: 'Yandex', shodan: 'Shodan',

@@ -7,12 +7,15 @@ const { getCache } = require('./lib/cache');
 const { send, cors, authOk, unauthorized } = require('./lib/http');
 const stats = require('./lib/stats');
 
-const MAX_QUERIES = Math.min(20, Math.max(1, parseInt(process.env.BATCH_MAX || '6', 10) || 6));
-const BATCH_BUDGET_MS = Math.max(5000, parseInt(process.env.BATCH_BUDGET_MS || '50000', 10) || 50000);
+const MAX_QUERIES = Math.min(2000, Math.max(1, parseInt(process.env.BATCH_MAX || '200', 10) || 200));
+const BATCH_BUDGET_MS = Math.max(5000, parseInt(process.env.BATCH_BUDGET_MS || '600000', 10) || 600000);
+const BATCH_CONCURRENCY = Math.min(64, Math.max(1, parseInt(process.env.BATCH_CONCURRENCY || '16', 10) || 16));
 
 function parseEngines(body) {
   const raw = body.engines || body.engine || 'google';
-  if (String(raw).trim() === '*' || String(raw).trim().toLowerCase() === 'all') return names();
+  if (String(raw).trim() === '*' || String(raw).trim().toLowerCase() === 'all') {
+    return ['google', 'duckduckgo', 'bing'];
+  }
   const list = String(raw).split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
   return list.length ? list : ['google'];
 }
@@ -74,20 +77,21 @@ module.exports = async (req, res) => {
   const cache = getCache();
 
   const started = Date.now();
-  const out = [];
+  const out = new Array(queries.length);
+  let cursor = 0;
 
-  for (const query of queries) {
+  async function runOne(query, index) {
     if (Date.now() - started > BATCH_BUDGET_MS) {
-      out.push({ query, success: false, code: 'TIME_BUDGET', error: 'Batch time budget exhausted', count: 0, results: [] });
-      continue;
+      out[index] = { query, success: false, code: 'TIME_BUDGET', error: 'Batch time budget exhausted', count: 0, results: [] };
+      return;
     }
 
     const cacheKey = JSON.stringify(['v4', engineList.join(','), query, num, pagesGiven ? pages : 'auto', 0, hl, gl, browser]);
     if (useCache) {
       const hit = cache.get(cacheKey);
       if (hit) {
-        out.push({ query, success: true, engine: hit.engine, cached: true, count: hit.count, results: hit.results });
-        continue;
+        out[index] = { query, success: true, engine: hit.engine, cached: true, count: hit.count, results: hit.results };
+        return;
       }
     }
 
@@ -95,7 +99,20 @@ module.exports = async (req, res) => {
     let lastErr = new Error('no engine produced a result');
     for (const engine of engineList) {
       try {
-        const r = await searchEngine({ engine, query, num, pages, start: 0, hl, gl, autoPages, proxyless: !!body.proxyless, browser });
+        const r = await searchEngine({
+          engine,
+          query,
+          num,
+          pages,
+          start: 0,
+          hl,
+          gl,
+          autoPages,
+          proxyless: !!body.proxyless,
+          liteOnly: engine === 'google_lite' || body.lite === true,
+          browser,
+          deadlineAt: started + BATCH_BUDGET_MS,
+        });
         settled = r;
         const item = {
           query,
@@ -111,7 +128,7 @@ module.exports = async (req, res) => {
           source: r.source,
           browser,
         };
-        out.push(item);
+        out[index] = item;
         if (useCache && r.results.length) {
           cache.set(cacheKey, { engine, count: r.results.length, results: r.results });
         }
@@ -121,7 +138,7 @@ module.exports = async (req, res) => {
       }
     }
     if (!settled) {
-      out.push({
+      out[index] = {
         query,
         success: false,
         code: lastErr.code || 'ERROR',
@@ -130,9 +147,20 @@ module.exports = async (req, res) => {
         results: [],
         duration_ms: 0,
         response_time_ms: 0,
-      });
+      };
     }
   }
+
+  async function worker() {
+    while (cursor < queries.length) {
+      const index = cursor;
+      cursor += 1;
+      await runOne(queries[index], index);
+    }
+  }
+
+  const n = Math.min(BATCH_CONCURRENCY, queries.length);
+  await Promise.all(Array.from({ length: n }, () => worker()));
 
   const durationMs = Date.now() - started;
   stats.recordBatch();

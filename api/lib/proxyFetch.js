@@ -133,23 +133,31 @@ function shuffle(list) {
   return a;
 }
 
-async function downloadList() {
+let listCache = { at: 0, list: [] };
+
+async function downloadList(force) {
+  const ttl = intEnv('PROXY_LIST_TTL_MS', 15000);
+  if (!force && listCache.list.length && Date.now() - listCache.at < ttl) {
+    return listCache.list.slice();
+  }
   const url = fetchUrl();
   const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort(), intEnv('PROXY_FETCH_TIMEOUT_MS', 20000));
+  const timer = setTimeout(() => ac.abort(), intEnv('PROXY_FETCH_TIMEOUT_MS', 8000));
   try {
     const res = await fetch(url, { signal: ac.signal, headers: { 'user-agent': 'gsearch-renderer' } });
     if (!res.ok) throw new Error(`proxy fetch HTTP ${res.status}`);
     const raw = await res.text();
-    return splitPool(raw);
+    const list = splitPool(raw);
+    if (list.length) listCache = { at: Date.now(), list };
+    return list;
   } finally {
     clearTimeout(timer);
   }
 }
 
-async function refreshLivePool() {
+async function refreshLivePool(force) {
   if (!enabled()) return livePool;
-  if (inFlight) return inFlight;
+  if (inFlight && !force) return inFlight;
   inFlight = (async () => {
     try {
       const all = shuffle(await downloadList());
@@ -234,6 +242,7 @@ function fetcherInfo() {
 module.exports = {
   PROXY_FETCH_URL,
   checkProxy,
+  downloadList,
   refreshLivePool,
   startProxyFetcher,
   stopProxyFetcher,

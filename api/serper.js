@@ -128,8 +128,10 @@ module.exports = async (req, res) => {
     lastErr = err;
   }
 
-  if (String(process.env.SERPER_RENDER || '0') === '1') {
-    for (const engine of engines) {
+  const googleLite = input.engine === 'google_lite' || input.engine === 'google' || input.engine === 'chrome';
+  if (googleLite || String(process.env.SERPER_RENDER || '0') === '1') {
+    const chain = googleLite ? ['chrome'] : engines;
+    for (const engine of chain) {
       try {
         const out = await tryOne(engine, false);
         if (out) return send(res, out);

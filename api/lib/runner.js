@@ -19,7 +19,7 @@ const READY_TIMEOUT_MS = intEnv('RESULT_TIMEOUT', intEnv('GOOGLE_READY_MS', 1500
 
 async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug, proxy, start }) {
   const t0 = Date.now();
-  const google = engine === 'google';
+  const google = engine === 'google' || engine === 'chrome' || engine === 'google_lite';
 
   if (google || process.env.VERCEL) await g.attachRoutes(page);
 
@@ -32,7 +32,7 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug, pr
     }
   }
 
-  if (engine === 'google' && String(process.env.GOOGLE_HOME_WARMUP || '0') === '1' && !(cfg && cfg.skipHome)) {
+  if (google && String(process.env.GOOGLE_HOME_WARMUP || '0') === '1' && !(cfg && cfg.skipHome)) {
     await page
       .goto(`https://www.google.com/?hl=${encodeURIComponent(hl)}&gl=${encodeURIComponent(gl)}`, {
         waitUntil: 'domcontentloaded',
@@ -143,7 +143,7 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug, pr
   if (!navError) {
     for (let pass = 0; pass <= (cfg.scroll || 0); pass++) {
       let results = await page.evaluate(cfg.parse).catch(() => []);
-      if (engine === 'google') {
+      if (google) {
         if (g.followGoto()) results = await resolveGoogleRedirects(context, results, num * 2);
         results = g.filterResults(results);
       }
@@ -190,7 +190,7 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug, pr
         excerpt = (
           await page.evaluate(() => (document.body ? document.body.innerText : '').replace(/\s+/g, ' ').trim())
         ).slice(0, 240);
-        if (engine === 'google') {
+        if (google) {
           const dom = await page.evaluate(() => {
             const el = document.querySelector('#search, #rso, #main');
             return el ? el.innerHTML.replace(/\s+/g, ' ').slice(0, 900) : '';
@@ -247,7 +247,7 @@ async function runQuery(opts) {
     e.code = 'UNKNOWN_ENGINE';
     throw e;
   }
-  const google = engine === 'google';
+  const google = engine === 'google' || engine === 'chrome' || engine === 'google_lite';
   const url = cfg.url({ q: query, num, start, hl, gl, proxy });
   const navMs = google ? g.navTimeoutMs() : NAV_TIMEOUT_MS;
 

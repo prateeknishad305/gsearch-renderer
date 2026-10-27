@@ -30,7 +30,7 @@ const { URL } = require('url');
   }
 })();
 
-const { closeAll } = require('./api/lib/browserPool');
+const { closeAll, warmup } = require('./api/lib/browserPool');
 const { detectPlatform } = require('./api/lib/chromium');
 const { startProxyFetcher, stopProxyFetcher } = require('./api/lib/proxyFetch');
 
@@ -179,6 +179,7 @@ async function handle(req, res) {
 }
 
 const server = http.createServer((req, res) => {
+  if (req.socket) req.socket.setTimeout(0);
   Promise.resolve(handle(req, res)).catch((err) => {
     if (!res.headersSent) {
       res.statusCode = 500;
@@ -190,9 +191,18 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.keepAliveTimeout = 65000;
-server.headersTimeout = 66000;
+server.keepAliveTimeout = 75000;
+server.headersTimeout = 80000;
 server.requestTimeout = 0;
+server.timeout = 0;
+server.maxConnections = Math.max(32, parseInt(process.env.HTTP_MAX_CONNECTIONS || '64', 10) || 64);
+server.on('clientError', (err, socket) => {
+  try {
+    if (socket && !socket.destroyed) socket.destroy();
+  } catch {
+    /* ignore */
+  }
+});
 
 function shutdown(signal) {
   console.log(`[gsearch-renderer] ${signal} received, shutting down`);
@@ -206,11 +216,27 @@ function shutdown(signal) {
 }
 
 function listen() {
+  process.on('uncaughtException', (err) => {
+    console.error('[gsearch-renderer] uncaughtException:', err && (err.stack || err.message || err));
+  });
+  process.on('unhandledRejection', (err) => {
+    console.error('[gsearch-renderer] unhandledRejection:', err && (err.stack || err.message || err));
+  });
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
   startProxyFetcher();
-  server.listen(PORT, HOST, () => {
+  server.on('error', (err) => {
+    if (err && err.code === 'EADDRINUSE') {
+      console.error('[gsearch-renderer] port in use, exiting extra instance');
+      process.exit(0);
+    }
+    console.error('[gsearch-renderer] server error:', err && (err.code || err.message));
+  });
+  server.listen({ port: PORT, host: HOST, backlog: 511 }, () => {
     console.log(`[gsearch-renderer] listening on http://${HOST}:${PORT} (${detectPlatform()})`);
+    warmup()
+      .then((ok) => console.log(`[gsearch-renderer] chromium warmup ${ok ? 'ready' : 'failed'}`))
+      .catch((err) => console.error('[gsearch-renderer] chromium warmup error:', err && err.message));
   });
   return server;
 }

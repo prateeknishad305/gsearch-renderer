@@ -14,24 +14,80 @@ function schemeForPort(port) {
   return SOCKS_PORTS.has(String(port)) ? 'socks5' : 'http';
 }
 
+function stripSlash(u) {
+  return String(u || '').replace(/\/$/, '');
+}
+
+function toChromiumProxy(proxy) {
+  if (!proxy) return null;
+  const p = stripSlash(proxy);
+  try {
+    const u = new URL(p);
+    if (/^socks/i.test(u.protocol) && (u.username || u.password)) {
+      return p.replace(/^socks5h?:/i, 'http:');
+    }
+    return p;
+  } catch {
+    return p;
+  }
+}
+
 function normalizeProxy(s) {
-  const line = String(s || '').trim();
+  let line = String(s || '').trim();
   if (!line || line.startsWith('#')) return null;
-  if (/^(https?|socks5h?|socks4a?):\/\//i.test(line)) return line;
+  line = line.replace(/^proxy:/i, '');
+  const schemeColon = line.match(/^(https?|socks5h?|socks4a?):\/\/([^/@:\s]+):(\d+):([^:\s]+):(.+)$/i);
+  if (schemeColon) {
+    return toChromiumProxy(
+      `${schemeColon[1].toLowerCase()}://${encodeURIComponent(schemeColon[4])}:${encodeURIComponent(schemeColon[5])}@${schemeColon[2]}:${schemeColon[3]}`
+    );
+  }
+  if (/^(https?|socks5h?|socks4a?):\/\//i.test(line)) return toChromiumProxy(line);
+  const userAt = line.match(/^([^/@\s]+):([^@/\s]+)@([^/@:\s]+):(\d+)$/);
+  if (userAt) {
+    return `http://${encodeURIComponent(userAt[1])}:${encodeURIComponent(userAt[2])}@${userAt[3]}:${userAt[4]}`;
+  }
+  const ipAt = line.match(/^([^/@:\s]+):(\d+)@([^/@\s]+):(.+)$/);
+  if (ipAt) {
+    return toChromiumProxy(
+      `${schemeForPort(ipAt[2])}://${encodeURIComponent(ipAt[3])}:${encodeURIComponent(ipAt[4])}@${ipAt[1]}:${ipAt[2]}`
+    );
+  }
   if (/^[^/@:\s]+:\d+$/.test(line)) {
     const port = line.slice(line.lastIndexOf(':') + 1);
     return `${schemeForPort(port)}://${line}`;
   }
   const m = line.match(/^([^/@:\s]+):(\d+):([^:\s]+):(.+)$/);
   if (!m) return null;
-  return `${schemeForPort(m[2])}://${encodeURIComponent(m[3])}:${encodeURIComponent(m[4])}@${m[1]}:${m[2]}`;
+  return toChromiumProxy(
+    `${schemeForPort(m[2])}://${encodeURIComponent(m[3])}:${encodeURIComponent(m[4])}@${m[1]}:${m[2]}`
+  );
 }
 
 function altProxy(proxy) {
   const p = String(proxy || '');
   if (/^socks5h?:\/\//i.test(p)) return p.replace(/^socks5h?:/i, 'http:');
-  if (/^https?:\/\//i.test(p)) return p.replace(/^https?:/i, 'socks5:');
+  if (/^https?:\/\//i.test(p)) {
+    try {
+      const u = new URL(p);
+      if (u.username || u.password) return null;
+    } catch {
+      return null;
+    }
+    return p.replace(/^https?:/i, 'socks5:');
+  }
   return null;
+}
+
+function chromiumProxyOk(proxy) {
+  if (!proxy) return true;
+  try {
+    const u = new URL(proxy);
+    if (/^socks/i.test(u.protocol) && (u.username || u.password)) return false;
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // Reads a newline/comma separated list of proxy URLs. Lines may be "# comment"-
@@ -329,6 +385,8 @@ module.exports = {
   clearUserProxies,
   MAX_USER_PROXIES,
   altProxy,
+  chromiumProxyOk,
+  toChromiumProxy,
   SOCKS_PORTS,
   proxyIdentity,
   proxyHost,
