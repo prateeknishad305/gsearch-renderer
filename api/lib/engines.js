@@ -4,106 +4,7 @@
 // Each `parse` function runs inside the page via page.evaluate() and must
 // be fully self-contained (no references to module scope).
 
-function parseGoogle() {
-  function resolveUrl(href) {
-    let url = href;
-    if (href.startsWith('/url?')) {
-      try {
-        const u = new URL(href, 'https://www.google.com');
-        url = u.searchParams.get('q') || u.searchParams.get('url') || href;
-      } catch {
-        /* ignore */
-      }
-    }
-    return url;
-  }
-  const isGoogleRel = (href) => /^\/(?:goto|url)\?/.test(href);
-  const NAV_TOKENS = new Set([
-    'ai mode', 'ai overview', 'ai overviews', 'try ai mode', 'search labs',
-    'show more', 'show all', 'ask follow up', 'ask a follow up',
-    'all', 'images', 'videos', 'news', 'shopping', 'maps', 'books',
-    'forums', 'more', 'tools', 'settings', 'privacy', 'sign in', 'sign out',
-    'web result', 'search results', 'learn more', 'help', 'terms', 'about',
-    'advertising', 'business', 'feedback', 'cookies', 'search settings',
-    'how search works', 'your data in search', 'see more', 'skip to main content',
-    'accessibility help', 'web', 'shopping', 'claim this knowledge panel',
-    'sign in to customize', 'images', 'videos',
-  ]);
-  const VIDEO_HOST = /(?:^|\.)(?:youtube\.com|youtu\.be|ytimg\.com|googlevideo\.com|ggpht\.com|youtube-nocookie\.com)$/i;
-  const AI_PREFIX = /^(?:ai\s+(?:mode|overview)\b|try\s+ai\s+mode\b)/i;
-  const isVideoHost = (url) => {
-    try {
-      return VIDEO_HOST.test(new URL(url, 'https://www.google.com').hostname);
-    } catch {
-      return false;
-    }
-  };
-  const isGoogleHost = (url) => {
-    try {
-      const h = new URL(url).hostname;
-      return h === 'google.com' || h.endsWith('.google.com');
-    } catch {
-      return false;
-    }
-  };
-  const region = document.querySelector('#search, #main, #rso, #center_col, #res') || document;
-  const results = [];
-  const seen = new Set();
-  const usedSnippets = new WeakSet();
-
-  function snippetOf(node, a) {
-    const container =
-      (node && node.closest('div.g, div.MjjYud, div.yuRUbf, div[data-sncf], div[jscontroller], div[data-hveid], li, div[data-sokoban-container]')) ||
-      (a && a.parentElement);
-    if (!container) return '';
-    const s = container.querySelector(
-      'div.VwiC3b, div[data-sncf], span.aCOpRe, div.MUxGbd, div[data-content-feature="1"], div.IsZvec, span.st, .lEBKkf'
-    );
-    if (s && !usedSnippets.has(s)) {
-      usedSnippets.add(s);
-      return (s.textContent || '').trim();
-    }
-    return '';
-  }
-
-  function push(title, rawHref, node, a) {
-    const url = resolveUrl(rawHref);
-    if (!isGoogleRel(rawHref) && (!/^https?:\/\//i.test(url) || isGoogleHost(url) || isVideoHost(url))) return;
-    const key = url || rawHref;
-    if (!title || title.length < 3 || NAV_TOKENS.has(title.toLowerCase()) || AI_PREFIX.test(title) || seen.has(key)) return;
-    seen.add(key);
-    results.push({ title, url: isGoogleRel(rawHref) ? rawHref : url, snippet: snippetOf(node, a) });
-  }
-
-  for (const h of region.querySelectorAll('h3, [role="heading"][aria-level="3"]')) {
-    const title = (h.textContent || '').trim();
-    const a = h.closest('a[href]') || (h.parentElement && h.parentElement.querySelector('a[href]'));
-    if (!a) continue;
-    push(title, a.getAttribute('href') || '', h, a);
-  }
-
-  if (results.length === 0) {
-    for (const a of region.querySelectorAll('div.yuRUbf a[href], div.g a[href], a[data-ved][href], cite')) {
-      const link = a.tagName === 'CITE' ? a.closest('a[href]') || (a.parentElement && a.parentElement.querySelector('a[href]')) : a;
-      if (!link) continue;
-      const rawHref = link.getAttribute('href') || '';
-      const titleEl = link.querySelector('h3, [role="heading"]') || link;
-      const title = (titleEl.textContent || '').trim();
-      push(title, rawHref, link, link);
-    }
-  }
-
-  if (results.length === 0) {
-    for (const a of region.querySelectorAll('a[href^="/url?"], a[href^="/goto?"], a[href^="http"]')) {
-      if (a.closest('nav, header, form, [role="navigation"], [role="banner"]')) continue;
-      const rawHref = a.getAttribute('href') || '';
-      const title = (a.textContent || '').trim();
-      if (title.length > 200) continue;
-      push(title, rawHref, a, a);
-    }
-  }
-  return results;
-}
+const { pagePack } = require('./googleExtract');
 
 function parseBing() {
   function decodeHref(href) {
@@ -173,10 +74,18 @@ function parseBrave() {
 }
 
 function parseMojeek() {
+  if (/^captcha$/i.test(document.title || '') || document.querySelector('[class*="altcha"], script[src*="altcha"]')) {
+    return [];
+  }
   function isMojeekHost(url) {
     try {
       const h = new URL(url).hostname;
-      return h === 'mojeek.com' || h.endsWith('.mojeek.com');
+      return (
+        h === 'mojeek.com' ||
+        h.endsWith('.mojeek.com') ||
+        h === 'altcha.org' ||
+        h.endsWith('.altcha.org')
+      );
     } catch {
       return true;
     }
@@ -197,12 +106,6 @@ function parseMojeek() {
     const a = li.querySelector('a.ob[href], h2 a[href], a.title[href], .title a[href]');
     if (a) push(results, seen, li, a);
   });
-  if (results.length === 0) {
-    document.querySelectorAll('a.ob[href^="http"]').forEach((a) => {
-      const li = a.closest('li') || a.parentElement;
-      if (li) push(results, seen, li, a);
-    });
-  }
   return results;
 }
 
@@ -787,9 +690,9 @@ function parseArchive() {
 
 const ENGINES = {
   google: {
-    url: ({ q, num, start, hl, gl, proxy }) => {
+    url: ({ q, num, start, hl, gl, proxy, tbs, before, after }) => {
       const g = require('./google');
-      return g.buildSearchUrl({ q, num, start, hl, gl, proxy });
+      return g.buildSearchUrl({ q, num, start, hl, gl, proxy, tbs, before, after });
     },
     cookies: ({ sticky } = {}) => {
       const g = require('./google');
@@ -797,12 +700,12 @@ const ENGINES = {
     },
     ready: 'h3',
     scroll: 0,
-      parse: parseGoogle,
+    parse: pagePack,
   },
   google_lite: {
-    url: ({ q, num, start, hl, gl, proxy }) => {
+    url: ({ q, num, start, hl, gl, proxy, tbs, before, after }) => {
       const g = require('./google');
-      return g.buildSearchUrl({ q, num, start, hl, gl, proxy });
+      return g.buildSearchUrl({ q, num, start, hl, gl, proxy, tbs, before, after });
     },
     cookies: ({ sticky } = {}) => {
       const g = require('./google');
@@ -810,12 +713,12 @@ const ENGINES = {
     },
     ready: 'h3',
     scroll: 0,
-    parse: parseGoogle,
+    parse: pagePack,
   },
   chrome: {
-    url: ({ q, num, start, hl, gl, proxy }) => {
+    url: ({ q, num, start, hl, gl, proxy, tbs, before, after }) => {
       const g = require('./google');
-      return g.buildSearchUrl({ q, num, start, hl, gl, proxy });
+      return g.buildSearchUrl({ q, num, start, hl, gl, proxy, tbs, before, after });
     },
     cookies: ({ sticky } = {}) => {
       const g = require('./google');
@@ -823,7 +726,7 @@ const ENGINES = {
     },
     ready: 'h3',
     scroll: 0,
-    parse: parseGoogle,
+    parse: pagePack,
   },
   bing: {
     url: ({ q, num, start, gl }) => {
@@ -842,7 +745,7 @@ const ENGINES = {
       if (start > 0) p.set('offset', String(start));
       return `https://search.brave.com/search?${p.toString()}`;
     },
-    ready: '.snippet a.l1, .result-wrapper a.l1, .snippet a[href^="http"]',
+    ready: '.snippet a.l1, .result-wrapper a.l1, .snippet a[href^="http"], main a[href^="http"]',
     parse: parseBrave,
   },
   mojeek: {
@@ -855,7 +758,7 @@ const ENGINES = {
       { name: 'lb', value: String(hl || 'en').slice(0, 8), domain: '.mojeek.com', path: '/' },
       { name: 'arc', value: String(gl || 'US').toUpperCase().slice(0, 8), domain: '.mojeek.com', path: '/' },
     ],
-    ready: 'ul.results-standard li a.ob, ul.results-standard li h2 a, a.ob[href^="http"]',
+    ready: 'ul.results-standard li a.ob, ul.results-standard li h2 a',
     parse: parseMojeek,
   },
   startpage: {
@@ -913,7 +816,7 @@ const ENGINES = {
         if (start > 0) p.set('p', String(Math.floor(start / 10) + 1));
         return `https://www.ecosia.org/search?${p.toString()}`;
       },
-      ready: 'article.result a[href^="http"], .result a.result-title, [data-test-id="mainline-result-web"] a',
+      ready: 'article.result a[href^="http"], .result a.result-title, [data-test-id="mainline-result-web"] a, main a[href^="http"]',
       parse: parseEcosia,
     },
     swisscows: {
@@ -940,7 +843,7 @@ const ENGINES = {
         if (start > 0) p.set('p', String(Math.floor(start / 10)));
         return `https://yandex.com/search/?${p.toString()}`;
       },
-      ready: 'li.serp-item a, .OrganicTitle-Link, a.organic__url, .serp-item a[href^="http"]',
+      ready: 'li.serp-item a, .OrganicTitle-Link, a.organic__url, .serp-item a[href^="http"], main a[href^="http"]',
       parse: parseYandex,
     },
     shodan: {
@@ -1012,11 +915,9 @@ function detectBlock(engine) {
 
   const resultSelectors = {
     google: 'h3',
-    google_lite: 'h3',
-    chrome: 'h3',
     bing: 'li.b_algo',
     brave: '.snippet a.l1, .result-wrapper a.l1, .snippet a[href^="http"]',
-     mojeek: 'ul.results-standard li a.ob, ul.results-standard li h2 a, a.ob[href^="http"]',
+      mojeek: 'ul.results-standard li a.ob, ul.results-standard li h2 a',
      startpage: '.w-gl__result a[href^="http"], .result a[href^="http"], [data-testid="result"] a[href^="http"]',
     yahoo: 'div.algo, li.algo, .algo-sr',
     duckduckgo: '#links .result',
@@ -1036,7 +937,7 @@ function detectBlock(engine) {
   const hasResults = !!document.querySelector(resultSelectors[engine] || 'html');
 
   const STORE_NAME = {
-    google: 'Google', google_lite: 'Google Lite', chrome: 'Chrome', bing: 'Bing', brave: 'Brave', mojeek: 'Mojeek',
+    google: 'Google', bing: 'Bing', brave: 'Brave', mojeek: 'Mojeek',
     startpage: 'Startpage', yahoo: 'Yahoo', duckduckgo: 'DuckDuckGo',
      duckduckgo_lite: 'DuckDuckGo', qwant: 'Qwant',
      ecosia: 'Ecosia', swisscows: 'Swisscows', seznam: 'Seznam', yandex: 'Yandex', shodan: 'Shodan',
@@ -1051,6 +952,7 @@ function detectBlock(engine) {
     return `${store} requires a logged-in session for search (public HTML, no API key).`;
   }
   if (/\/(captcha|recaptcha|challenge|sorry)\//i.test(url)) return `${store} redirected to an anti-bot challenge (${url.split('?')[0]}).`;
+  if (/^captcha$/i.test(title)) return `${store} served an ALTCHA / captcha challenge.`;
 
   // 2) Strong anti-automation phrases — decisive whenever they appear.
   const STRONG = [

@@ -57,17 +57,17 @@ const ENDPOINTS = {
     if (s) p.set('page', String(Math.floor(s / 10) + 1));
     return `https://www.startpage.com/sp/search?${p.toString()}`;
   },
-  google_lite: ({ q, s, gl, hl }) => {
+  google_lite: ({ q, s, gl, hl, tbs, before, after }) => {
     try {
-      return require('./google').buildSearchUrl({ q, num: 10, start: s || 0, hl, gl });
+      return require('./google').buildSearchUrl({ q, num: 10, start: s || 0, hl, gl, tbs, before, after });
     } catch {
       const p = new URLSearchParams({ q, hl: hl || 'en', gl: gl || 'us', start: String(s || 0) });
       return `https://www.google.com/search?${p.toString()}`;
     }
   },
-  google: ({ q, s, gl, hl }) => {
+  google: ({ q, s, gl, hl, tbs, before, after }) => {
     try {
-      return require('./google').buildSearchUrl({ q, num: 10, start: s || 0, hl, gl });
+      return require('./google').buildSearchUrl({ q, num: 10, start: s || 0, hl, gl, tbs, before, after });
     } catch {
       const p = new URLSearchParams({ q, hl: hl || 'en', gl: gl || 'us', start: String(s || 0) });
       return `https://www.google.com/search?${p.toString()}`;
@@ -249,101 +249,19 @@ function parseAnchorBlocks(html, { hostRe, titleRe }) {
 }
 
 function parseGoogleLite(html) {
-  const results = [];
-  const seen = new Set();
-  function resolveUrl(href) {
-    let url = decodeEntities(String(href || '').trim());
-    if (url.startsWith('/url?')) {
-      try {
-        const u = new URL(url, 'https://www.google.com');
-        url = u.searchParams.get('q') || u.searchParams.get('url') || url;
-      } catch {
-        /* ignore */
-      }
-    }
-    if (url.startsWith('/url?q=')) {
-      url = decodeEntities(url.slice('/url?q='.length).split('&')[0]);
-    }
-    try {
-      url = decodeURIComponent(url);
-    } catch {
-      /* ignore */
-    }
-    return url;
-  }
-  function citeToUrl(cite) {
-    let t = decodeEntities(stripTags(cite)).replace(/\s+/g, ' ').trim();
-    if (!t) return '';
-    const parts = t.split(/\s*›\s*/).map((s) => s.trim()).filter(Boolean);
-    let hostPart = parts[0] || '';
-    if (!hostPart) return '';
-    if (!/^https?:\/\//i.test(hostPart)) hostPart = `https://${hostPart.replace(/^\/+/, '')}`;
-    try {
-      const u = new URL(hostPart);
-      const extra = parts[1] || '';
-      if (extra && extra !== '...' && !/\s/.test(extra) && extra.length < 180) {
-        const path = extra.startsWith('/') ? extra : `/${extra}`;
-        return `${u.origin}${path}`;
-      }
-      return `${u.origin}/`;
-    } catch {
-      return '';
-    }
-  }
-  function skipHost(url) {
-    try {
-      const h = new URL(url).hostname;
-      return (
-        h === 'google.com' ||
-        h.endsWith('.google.com') ||
-        /googleusercontent\.com$|gstatic\.com$|googleadservices\.com$/i.test(h)
-      );
-    } catch {
-      return true;
-    }
-  }
-  function push(title, url) {
-    title = decodeEntities(stripTags(title));
-    url = resolveUrl(url);
-    if (!title || title.length < 3 || title.length > 200) return;
-    if (isGarbageUrl(url) || isAiModeTitle(title)) return;
-    if (!/^https?:\/\//i.test(url) || skipHost(url) || seen.has(url)) return;
-    seen.add(url);
-    results.push({ title, url, snippet: '' });
-  }
-  const re =
-    /<h3[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>|<a[^>]+href="([^"]+)"[^>]*>[\s\S]*?<h3[^>]*>([\s\S]*?)<\/h3>/gi;
-  let m;
-  while ((m = re.exec(html))) {
-    push(m[2] || m[4] || '', m[1] || m[3] || '');
-  }
-  if (results.length === 0) {
-    const re2 = /href="(\/url\?q=[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
-    while ((m = re2.exec(html))) push(m[2], m[1]);
-  }
-  if (results.length === 0) {
-    const re3 = /<a[^>]+href="(https?:\/\/[^"]+)"[^>]*>\s*<h3[^>]*>([\s\S]*?)<\/h3>/gi;
-    while ((m = re3.exec(html))) push(m[2], m[1]);
-  }
-  if (results.length === 0) {
-    const h3re = /<h3[^>]*>([\s\S]*?)<\/h3>/gi;
-    while ((m = h3re.exec(html))) {
-      const after = html.slice(m.index, m.index + 1800);
-      const cite = after.match(/<cite[^>]*>([\s\S]*?)<\/cite>/i);
-      if (cite) push(m[1], citeToUrl(cite[1]));
-    }
-  }
-  return results;
+  return require('./googleExtract').extractFromHtml(html);
 }
 
 function parseMojeekLite(html) {
+  const hostRe = /mojeek\.com$|altcha\.org$/i;
+  if (/<title>\s*captcha\s*<\/title>/i.test(html) || /altcha\.js|data-altcha/i.test(html)) return [];
   const news = parseAnchorBlocks(html, {
-    hostRe: /mojeek\.com$/i,
+    hostRe,
     titleRe: /<h2[^>]*>\s*<a[^>]+href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
   });
   if (news.length) return news;
   return parseAnchorBlocks(html, {
-    hostRe: /mojeek\.com$/i,
+    hostRe,
     titleRe: /<a[^>]+class="[^"]*\bob\b[^"]*"[^>]+href="(https?:\/\/[^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
   });
 }
@@ -682,7 +600,13 @@ function decodeChunked(body) {
 function liveProxies(engine) {
   try {
     const { getShardPool, otherProxyPool, googleProxyPool, getUserProxies } = require('./proxyPool');
-    if (engine === 'google' || engine === 'google_lite') {
+    try {
+      const { getLivePool, refreshLivePool } = require('./proxyFetch');
+      if (!getLivePool().length) refreshLivePool().catch(() => {});
+    } catch {
+      /* ignore */
+    }
+    if (engine === 'google' || engine === 'google_lite' || engine === 'chrome') {
       const user = getUserProxies().filter(Boolean);
       if (user.length) return user;
       return googleProxyPool(getShardPool()).filter(Boolean);
@@ -769,9 +693,10 @@ async function fetchChromeGoogle(url, engine) {
     e.code = 'SKIP';
     throw e;
   }
-  const timeoutMs = Math.max(12000, parseInt(process.env.CHROME_FETCH_MS, 10) || 15000);
-  const pool = liveProxies(engine).filter(Boolean);
-  const tries = pool.length ? pool.slice(0, 1) : [];
+  const timeoutMs = Math.max(8000, parseInt(process.env.CHROME_FETCH_MS, 10) || 12000);
+  const pool = liveProxies(engine).filter(Boolean).sort(() => Math.random() - 0.5);
+  const n = Math.max(1, Math.min(2, parseInt(process.env.CHROME_FETCH_WORKERS, 10) || 1));
+  const tries = pool.slice(0, n);
   if (!tries.length) {
     const e = new Error('no proxy');
     e.code = 'NO_PROXY';
@@ -780,7 +705,7 @@ async function fetchChromeGoogle(url, engine) {
   let lastErr = null;
   for (const proxy of tries) {
     try {
-      const r = await chromeFetch.fetchHtml(url, { proxy, timeoutMs });
+      const r = await chromeFetch.fetchHtml(url, { proxy, timeoutMs, engine });
       const loc = r && r.finalUrl;
       if (loc && /\/sorry\//i.test(loc)) {
         lastErr = Object.assign(new Error('sorry'), { code: 'BLOCKED' });
@@ -790,12 +715,16 @@ async function fetchChromeGoogle(url, engine) {
         lastErr = Object.assign(new Error(`status ${r.status}`), { code: 'LITE_HTTP_ERROR' });
         continue;
       }
-      const html = r && r.html;
+      let html = r && r.html;
       if (!html || isBlockedPage(html, engine)) {
         lastErr = Object.assign(new Error('blocked'), { code: 'BLOCKED' });
         continue;
       }
-      return html;
+      if (r.extras && html && !/<!--gsearch-extras:/.test(html)) {
+        const { extrasComment } = require('./googleExtract');
+        html += extrasComment(r.extras);
+      }
+      return { html, extras: r.extras || null, results: r.results || null };
     } catch (err) {
       lastErr = err;
     }
@@ -812,7 +741,7 @@ async function fetchLitePage(url, engine) {
     'accept-language': 'en-US,en;q=0.9',
     accept: JSON_ENGINES.has(engine) ? 'application/json' : 'text/html,application/xhtml+xml',
   };
-  if (engine === 'google' || engine === 'google_lite') {
+  if (engine === 'google' || engine === 'google_lite' || engine === 'mojeek') {
     try {
       return await fetchChromeGoogle(url, engine);
     } catch (err) {
@@ -822,10 +751,10 @@ async function fetchLitePage(url, engine) {
     }
   }
   try {
-    return await fetchDirect(url, engine, headers);
+    return { html: await fetchDirect(url, engine, headers) };
   } catch (directErr) {
     try {
-      return await raceProxyFetch(url, engine, 4000);
+      return { html: await raceProxyFetch(url, engine, 4000) };
     } catch {
       const e = new Error(`Lite fetch failed: ${directErr.message}`);
       e.code = directErr.code || 'LITE_FETCH_ERROR';
@@ -834,7 +763,7 @@ async function fetchLitePage(url, engine) {
   }
 }
 
-async function fastLiteSearch({ engine, query, num = 10, hl = 'en', gl = 'us', start = 0 }) {
+async function fastLiteSearch({ engine, query, num = 10, hl = 'en', gl = 'us', start = 0, tbs, before, after }) {
   const build = ENDPOINTS[engine];
   if (!build) {
     const e = new Error(`No lite endpoint for engine "${engine}"`);
@@ -847,16 +776,21 @@ async function fastLiteSearch({ engine, query, num = 10, hl = 'en', gl = 'us', s
   const pageCount = Math.min(5, Math.max(1, Math.ceil(num / 10)));
   const results = [];
   const seen = new Set();
+  let extras = null;
   let lastErr = null;
   const base = Math.max(0, Number(start) || 0);
+  const google = engine === 'google' || engine === 'google_lite';
 
   for (let i = 0; i < pageCount; i++) {
     if (results.length >= num) break;
-    const url = build({ q: query, kl, s: base + i * 10, num, gl, hl });
+    const url = build({ q: query, kl, s: base + i * 10, num, gl, hl, tbs, before, after });
     try {
-      const html = await fetchLitePage(url, engine);
+      const pack = await fetchLitePage(url, engine);
+      const html = typeof pack === 'string' ? pack : pack.html;
+      if (google && !extras) extras = (pack && pack.extras) || require('./googleExtract').parseExtras(html);
       let added = 0;
-      for (const r of parser(html)) {
+      const parsed = google && pack && Array.isArray(pack.results) && pack.results.length ? pack.results : parser(html);
+      for (const r of parsed) {
         if (seen.has(r.url)) continue;
         seen.add(r.url);
         results.push(r);
@@ -880,6 +814,7 @@ async function fastLiteSearch({ engine, query, num = 10, hl = 'en', gl = 'us', s
   return {
     results: results.slice(0, Math.min(num, results.length)),
     duration_ms: Date.now() - t0,
+    extras,
   };
 }
 

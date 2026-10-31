@@ -263,13 +263,13 @@ function buildTries(explicitProxy, proxyless, engine, stickyKey) {
 
 // Runs one engine, optionally across multiple result pages, merging unique URLs.
 // autoPages=true keeps fetching until `num` unique URLs (or MAX_PAGES).
-async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en', gl = 'us', proxy, debug, autoPages = false, proxyless = false, liteOnly = false, renderOnly = false, browser, deadlineAt }) {
+async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en', gl = 'us', proxy, debug, autoPages = false, proxyless = false, liteOnly = false, renderOnly = false, browser, deadlineAt, tbs, before, after }) {
   const pageCount = Math.min(Math.max(1, pages), MAX_PAGES);
   const step = pageStep(engine, num);
   const perPage = perPageNum(engine, num);
   const cap = Math.min(MAX_NUM, autoPages ? Math.max(num, 1) : num * pageCount);
 
-  if (engine === 'google_lite') liteOnly = true;
+  if (engine === 'google_lite' || engine === 'mojeek') liteOnly = true;
   if (engine === 'chrome') renderOnly = true;
 
   const deadline = Math.min(
@@ -277,13 +277,13 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
     deadlineAt || Date.now() + requestTimeoutMs()
   );
 
-  const tryLite = !renderOnly && (liteOnly || engine === 'google' || (!debug && liteEnabled(engine)));
+  const tryLite = !renderOnly && (liteOnly || (!debug && liteEnabled(engine)));
   let liteAttempted = false;
   if (tryLite && Date.now() + 2500 < deadline) {
     liteAttempted = true;
     try {
       const liteEngine = engine === 'google' ? 'google_lite' : engine;
-      const lite = await fastLiteSearch({ engine: liteEngine, query, num: cap, hl, gl, start });
+      const lite = await fastLiteSearch({ engine: liteEngine, query, num: cap, hl, gl, start, tbs, before, after });
       if (lite.results && lite.results.length) {
         circuit.record(engine, 'OK');
         return {
@@ -294,16 +294,17 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
           source: 'lite',
           pages_fetched: 1,
           pages_requested: pageCount,
+          extras: lite.extras || null,
         };
       }
-     } catch (err) {
-        if (liteOnly || skipRender(engine) || (!isGoogleEngine(engine) && isHardBlock(err))) {
-         if (err && err.code) throw err;
-         const e = new Error(`Engine "${engine}" lite path empty`);
-         e.code = 'LITE_EMPTY';
-         throw e;
-       }
-     }
+      } catch (err) {
+        if (liteOnly || skipRender(engine)) {
+          if (err && err.code) throw err;
+          const e = new Error(`Engine "${engine}" lite path empty`);
+          e.code = 'LITE_EMPTY';
+          throw e;
+        }
+      }
    }
    if (liteOnly || skipRender(engine)) {
      const e = new Error(`Engine "${engine}" has no lite results`);
@@ -327,6 +328,7 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
   let pagesFetched = 0;
   let proxyUsed = null;
   let duration = 0;
+  let extras = null;
   let lastErr = new Error('no search attempt could be made');
   const stickyKey = isGoogleEngine(engine) ? `g:${query}|${hl}|${gl}` : '';
 
@@ -336,6 +338,7 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
     let dur = 0;
     let localAttempts = 0;
     let err = lastErr;
+    let pageExtras = null;
     const candidates = buildTries(proxy, proxyless, engine, stickyKey);
     if (!candidates.length) {
       const e = new Error('no usable proxy or direct exit');
@@ -382,9 +385,9 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
       }
       localAttempts += 1;
       try {
-        const r = await runQuery({ engine, query, num: perPage, start: offset, hl, gl, proxy: candidate, debug, browser });
+        const r = await runQuery({ engine, query, num: perPage, start: offset, hl, gl, proxy: candidate, debug, browser, tbs, before, after });
         if (candidate) googleIp.record(candidate, 'OK');
-        return { pageResults: r.results, used: candidate, dur: r.duration_ms };
+        return { pageResults: r.results, used: candidate, dur: r.duration_ms, extras: r.extras || null };
       } catch (caught) {
         if (candidate && !isGoogleEngine(engine)) googleIp.record(candidate, (caught && caught.code) || 'ERROR');
         throw caught;
@@ -400,6 +403,7 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
         pageResults = win.pageResults;
         used = win.used;
         dur = win.dur;
+        if (win.extras) pageExtras = win.extras;
         if (isGoogleEngine(engine) && used) setStickyGoogleProxy(stickyKey, used);
         break;
       } catch (caught) {
@@ -408,7 +412,6 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
         if (isGoogleEngine(engine)) dropStickyGoogleProxy(stickyKey);
         if (isHardBlock(caught)) {
           if (isGoogleEngine(engine)) skipProxies = true;
-          else break;
         }
       }
     }
@@ -418,10 +421,11 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
         if (candidate == null) continue;
         localAttempts += 1;
         try {
-        const r = await runQuery({ engine, query, num: perPage, start: offset, hl, gl, proxy: candidate, debug, browser });
+        const r = await runQuery({ engine, query, num: perPage, start: offset, hl, gl, proxy: candidate, debug, browser, tbs, before, after });
           pageResults = r.results;
           dur = r.duration_ms;
           used = candidate;
+          if (r.extras) pageExtras = r.extras;
           break;
         } catch (caught) {
           err = caught;
@@ -429,12 +433,13 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
         }
       }
     }
-     if (!pageResults && localAttempts === 0) {
-       const e = new Error(Date.now() > deadline ? 'search budget exhausted' : 'no search attempt could be made');
-       e.code = Date.now() > deadline ? 'TIMEOUT' : 'NO_ATTEMPT';
+      if (!pageResults && localAttempts === 0) {
+       const late = Date.now() > deadline;
+       const e = new Error(late ? 'search budget exhausted' : 'no search attempt could be made');
+       e.code = late ? 'TIMEOUT' : 'NO_ATTEMPT';
        err = e;
      }
-     return { pageResults, used, dur, localAttempts, err };
+      return { pageResults, used, dur, localAttempts, err, extras: pageExtras };
   }
 
   const parallel =
@@ -452,6 +457,7 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
       pagesFetched += 1;
       duration += one.dur;
       if (one.used) proxyUsed = one.used;
+      if (one.extras && !extras) extras = one.extras;
       for (const item of one.pageResults) {
         if (item && item.url && !seen.has(item.url)) {
           seen.add(item.url);
@@ -472,6 +478,7 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
       pagesFetched += 1;
       duration += one.dur;
       proxyUsed = one.used;
+      if (one.extras && !extras) extras = one.extras;
       for (const item of one.pageResults) {
         if (item && item.url && !seen.has(item.url)) {
           seen.add(item.url);
@@ -496,6 +503,7 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
     source: 'render',
     pages_fetched: pagesFetched,
     pages_requested: pageCount,
+    extras,
   };
 }
 
@@ -594,6 +602,9 @@ async function handleSearch(req, res) {
   const proxyless = req.query.proxyless === '1' || req.query.proxyless === 'true';
   const liteOnly = req.query.lite === '1' || req.query.source === 'lite';
   const renderOnly = req.query.render === '1' || req.query.source === 'render';
+  const tbs = String(req.query.tbs || '').trim();
+  const before = String(req.query.before || '').trim();
+  const after = String(req.query.after || '').trim();
   const mode = String(req.query.mode || 'fallback').toLowerCase() === 'merge' ? 'merge' : 'fallback';
   const shodanOpts = parseShodanOptions(req.query);
   const dorkInfo = parseDork(q);
@@ -642,6 +653,9 @@ async function handleSearch(req, res) {
     dorkMode ? 1 : 0,
     wantDedupe ? 1 : 0,
     resultFilters,
+    tbs || 0,
+    before || 0,
+    after || 0,
   ]);
   if (useCache) {
     const hit = cache.get(cacheKey);
@@ -655,7 +669,7 @@ async function handleSearch(req, res) {
       engineList.map(async (engine) => {
         try {
           const engineQuery = dorkMode ? adaptQuery(q, engine) : q;
-          const r = await searchEngine({ engine, query: engineQuery, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless, liteOnly, renderOnly, browser, deadlineAt: Date.now() + searchBudgetMs() });
+          const r = await searchEngine({ engine, query: engineQuery, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless, liteOnly, renderOnly, browser, deadlineAt: Date.now() + searchBudgetMs(), tbs, before, after });
           let results = shodanOptionsActive(shodanOpts)
             ? applyShodanOptions(r.results, shodanOpts)
             : r.results;
@@ -689,6 +703,13 @@ async function handleSearch(req, res) {
       dork: dorkBody(ok.length ? ok[0].engine : engineList[0]),
       dedupe: wantDedupe,
     };
+    const mergeExtras = ok[0] && ok[0].r && ok[0].r.extras;
+    if (mergeExtras) {
+      if (mergeExtras.knowledgeGraph) body.knowledgeGraph = mergeExtras.knowledgeGraph;
+      if (mergeExtras.peopleAlsoAsk) body.peopleAlsoAsk = mergeExtras.peopleAlsoAsk;
+      if (mergeExtras.relatedSearches) body.relatedSearches = mergeExtras.relatedSearches;
+      if (mergeExtras.answerBox) body.answerBox = mergeExtras.answerBox;
+    }
     if (explain) {
       body.diagnostics = {
         mode: 'merge',
@@ -727,7 +748,7 @@ async function handleSearch(req, res) {
     const startedAt = Date.now();
     try {
       const engineQuery = dorkMode ? adaptQuery(q, engine) : q;
-      const r = await searchEngine({ engine, query: engineQuery, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless, liteOnly, renderOnly, browser, deadlineAt });
+      const r = await searchEngine({ engine, query: engineQuery, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless, liteOnly, renderOnly, browser, deadlineAt, tbs, before, after });
       let results = shodanOptionsActive(shodanOpts)
         ? applyShodanOptions(r.results, shodanOpts)
         : r.results;
@@ -775,6 +796,12 @@ async function handleSearch(req, res) {
         dork: dorkBody(engine),
         dedupe: wantDedupe,
       };
+      if (r.extras) {
+        if (r.extras.knowledgeGraph) body.knowledgeGraph = r.extras.knowledgeGraph;
+        if (r.extras.peopleAlsoAsk) body.peopleAlsoAsk = r.extras.peopleAlsoAsk;
+        if (r.extras.relatedSearches) body.relatedSearches = r.extras.relatedSearches;
+        if (r.extras.answerBox) body.answerBox = r.extras.answerBox;
+      }
       if (explain) {
         body.diagnostics = {
           mode: 'fallback',

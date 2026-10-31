@@ -188,8 +188,11 @@ async function checkout(opts) {
 async function destroyWorker(w) {
   if (!w) return;
   createdPages = Math.max(0, createdPages - 1);
-  await w.context.close().catch(() => {});
-  if (!reuseOn() && w.browser) await w.browser.close().catch(() => {});
+  const closer = w.context ? w.context.close().catch(() => {}) : Promise.resolve();
+  await Promise.race([closer, new Promise((r) => setTimeout(r, 1500))]);
+  if (!reuseOn() && w.browser) {
+    await Promise.race([w.browser.close().catch(() => {}), new Promise((r) => setTimeout(r, 1500))]);
+  }
 }
 
 async function checkin(w) {
@@ -230,8 +233,32 @@ async function withBrowser(opts, fn) {
 async function withPage(opts, fn) {
   await acquireSlot();
   let worker = null;
+  let cancelled = false;
   try {
-    worker = await checkout(opts);
+    const checkoutMs = Math.max(8000, opts.navMs || SLOT_WAIT_MS || 8000);
+    const pending = checkout(opts).then((w) => {
+      if (cancelled) {
+        busyPages = Math.max(0, busyPages - 1);
+        destroyWorker(w).catch(() => {});
+        return null;
+      }
+      return w;
+    });
+    worker = await Promise.race([
+      pending,
+      new Promise((_, reject) => {
+        setTimeout(() => {
+          const e = new Error('browser checkout timeout');
+          e.code = 'QUEUE_TIMEOUT';
+          reject(e);
+        }, checkoutMs);
+      }),
+    ]);
+    if (!worker) {
+      const e = new Error('browser checkout timeout');
+      e.code = 'QUEUE_TIMEOUT';
+      throw e;
+    }
     const navMs = opts.navMs;
     if (navMs) {
       worker.page.setDefaultTimeout(navMs);
@@ -239,11 +266,12 @@ async function withPage(opts, fn) {
     }
     return await fn(worker.page, worker.context, worker.browser);
   } catch (err) {
+    cancelled = true;
     const dead =
       !worker ||
       !worker.page ||
       worker.page.isClosed() ||
-      /Target closed|has been closed|browser has been closed/i.test(String((err && err.message) || ''));
+      /Target closed|has been closed|browser has been closed|checkout timeout/i.test(String((err && err.message) || ''));
     if (dead && worker) {
       busyPages = Math.max(0, busyPages - 1);
       await destroyWorker(worker);
@@ -331,4 +359,6 @@ module.exports = {
   sweepIdle,
   closeAll,
   browserConnected,
+  acquireSlot,
+  releaseSlot,
 };

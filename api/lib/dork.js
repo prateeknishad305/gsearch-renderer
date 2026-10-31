@@ -11,41 +11,30 @@
 const OPERATORS = [
   ['site', /\bsite:\s*("[^"]+"|[^\s]+)/gi],
   ['inurl', /\binurl:\s*("[^"]+"|[^\s]+)/gi],
-  ['allinurl', /\ballinurl:\s*("[^"]+"|[^\s]+)/gi],
   ['intitle', /\bintitle:\s*("[^"]+"|[^\s]+)/gi],
-  ['allintitle', /\ballintitle:\s*("[^"]+"|[^\s]+)/gi],
   ['intext', /\bintext:\s*("[^"]+"|[^\s]+)/gi],
   ['allintext', /\ballintext:\s*("[^"]+"|[^\s]+)/gi],
   ['inbody', /\binbody:\s*("[^"]+"|[^\s]+)/gi],
   ['inanchor', /\binanchor:\s*("[^"]+"|[^\s]+)/gi],
-  ['allinanchor', /\ballinanchor:\s*("[^"]+"|[^\s]+)/gi],
   ['filetype', /\b(?:filetype|ext):\s*("[^"]+"|[^\s]+)/gi],
   ['related', /\brelated:\s*("[^"]+"|[^\s]+)/gi],
   ['cache', /\bcache:\s*("[^"]+"|[^\s]+)/gi],
   ['title', /\btitle:\s*("[^"]+"|[^\s]+)/gi],
   ['url', /\burl:\s*("[^"]+"|[^\s]+)/gi],
   ['mime', /\bmime:\s*("[^"]+"|[^\s]+)/gi],
-  ['before', /\bbefore:\s*([0-9]{4}(?:-[0-9]{2}(?:-[0-9]{2})?)?)/gi],
-  ['after', /\bafter:\s*([0-9]{4}(?:-[0-9]{2}(?:-[0-9]{2})?)?)/gi],
-  ['define', /\bdefine:\s*("[^"]+"|[^\s]+)/gi],
-  ['info', /\binfo:\s*("[^"]+"|[^\s]+)/gi],
-  ['link', /\blink:\s*("[^"]+"|[^\s]+)/gi],
-  ['source', /\bsource:\s*("[^"]+"|[^\s]+)/gi],
 ];
 
-const GOOGLE_OPS = OPERATORS.map((row) => row[0]);
-
 const CAPABILITY = {
-  google: GOOGLE_OPS,
-  google_lite: GOOGLE_OPS,
-  chrome: GOOGLE_OPS,
-  bing: ['site', 'intitle', 'intext', 'inbody', 'inanchor', 'filetype', 'ip', 'contains', 'url'],
+  google: ['site', 'inurl', 'intitle', 'intext', 'allintext', 'inbody', 'inanchor', 'filetype', 'related', 'cache'],
+  google_lite: ['site', 'inurl', 'intitle', 'intext', 'allintext', 'inbody', 'inanchor', 'filetype', 'related', 'cache'],
+  chrome: ['site', 'inurl', 'intitle', 'intext', 'allintext', 'inbody', 'inanchor', 'filetype', 'related', 'cache'],
+  bing: ['site', 'intitle', 'intext', 'inbody', 'inanchor', 'filetype'],
   yahoo: ['site', 'intitle', 'inurl', 'filetype'],
   duckduckgo: ['site', 'intitle', 'inurl', 'filetype'],
   duckduckgo_lite: ['site', 'intitle', 'inurl', 'filetype'],
   brave: ['site', 'intitle', 'intext', 'filetype'],
   mojeek: ['site', 'intitle', 'inurl', 'filetype'],
-  startpage: ['site', 'intitle', 'inurl', 'filetype', 'intext', 'allintitle', 'allinurl'],
+  startpage: ['site', 'intitle', 'inurl', 'filetype'],
   ecosia: ['site', 'intitle', 'inurl', 'filetype'],
   qwant: ['site', 'intitle', 'inurl', 'filetype'],
   swisscows: ['site', 'filetype'],
@@ -129,26 +118,21 @@ function adaptQuery(query, engine) {
       .replace(/\bfiletype:/gi, 'mime:')
       .replace(/\bext:/gi, 'mime:');
   }
-  const supported = new Set(CAPABILITY[engine] || []);
-  if (engine === 'google' || engine === 'google_lite' || engine === 'chrome' || engine === 'yandex') return q.replace(/\s+/g, ' ').trim();
-  for (const [key] of OPERATORS) {
-    if (supported.has(key)) continue;
-    const re = new RegExp(`\\b${key}:\\s*("[^"]+"|[^\\s]+)`, 'gi');
-    q = q.replace(re, (_, v) => unquote(v));
-  }
-  q = q.replace(/\bext:\s*("[^"]+"|[^\s]+)/gi, (_, v) => unquote(v));
   return q.replace(/\s+/g, ' ').trim();
 }
 
-const TRACKING_PARAM = /^(?:utm_[a-z]+|gclid|dclid|fbclid|yclid|msclkid|igshid|mc_cid|mc_eid|ref|ref_src|source)$/i;
+const TRACKING_PARAM = /^(?:utm_[a-z0-9_]+|gclid|dclid|fbclid|yclid|msclkid|igshid|mc_cid|mc_eid|ref|ref_src|source|ved|usg|sa|sxsrf|ei|gs_lcp|sourceid|ie|oe)$/i;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function canonicalUrl(url) {
   try {
     const u = new URL(String(url || ''));
     u.hash = '';
     const drop = [];
-    for (const key of u.searchParams.keys()) {
+    for (const [key, val] of u.searchParams.entries()) {
       if (TRACKING_PARAM.test(key)) drop.push(key);
+      else if (key === 't' && UUID_RE.test(String(val))) drop.push(key);
+      else if (key === 'param' && /^\d{1,6}$/.test(String(val))) drop.push(key);
     }
     for (const key of drop) u.searchParams.delete(key);
     const path = u.pathname.replace(/\/+$/, '');
@@ -192,42 +176,22 @@ function enforceDork(results, dorkInfo) {
     .filter(Boolean)
     .map((v) => String(v).replace(/^\./, '').toLowerCase());
   if (filetypes.length) {
-    const filtered = out.filter((r) => {
+    out = out.filter((r) => {
       try {
         const path = new URL(r.url).pathname.toLowerCase();
-        const blob = `${path} ${r.url} ${r.title || ''}`.toLowerCase();
-        return filetypes.some((ext) => path.endsWith(`.${ext}`) || blob.includes(`.${ext}`) || blob.includes(ext));
+        return filetypes.some((ext) => path.endsWith(`.${ext}`));
       } catch {
         return false;
       }
     });
-    if (filtered.length) out = filtered;
   }
 
-  const inurls = []
-    .concat(dorkInfo.operators && dorkInfo.operators.inurl)
-    .concat(dorkInfo.operators && dorkInfo.operators.allinurl)
-    .concat(dorkInfo.operators && dorkInfo.operators.url)
-    .filter(Boolean);
+  const inurls = (dorkInfo.operators && dorkInfo.operators.inurl) || [];
   if (inurls.length) {
-    const filtered = out.filter((r) => {
-      const u = String((r && r.url) || '').toLowerCase();
+    out = out.filter((r) => {
+      const u = String(r && r.url || '').toLowerCase();
       return inurls.every((tok) => u.includes(String(tok).toLowerCase()));
     });
-    if (filtered.length) out = filtered;
-  }
-
-  const titles = []
-    .concat(dorkInfo.operators && dorkInfo.operators.intitle)
-    .concat(dorkInfo.operators && dorkInfo.operators.allintitle)
-    .concat(dorkInfo.operators && dorkInfo.operators.title)
-    .filter(Boolean);
-  if (titles.length) {
-    const filtered = out.filter((r) => {
-      const t = String((r && r.title) || '').toLowerCase();
-      return titles.every((tok) => t.includes(String(tok).toLowerCase()));
-    });
-    if (filtered.length) out = filtered;
   }
 
   return out;

@@ -17,9 +17,17 @@ function intEnv(name, dflt) {
 const NAV_TIMEOUT_MS = intEnv('NAVIGATION_TIMEOUT', intEnv('GOOGLE_NAV_MS', 25000));
 const READY_TIMEOUT_MS = intEnv('RESULT_TIMEOUT', intEnv('GOOGLE_READY_MS', 15000));
 
+function unpackParse(raw) {
+  if (Array.isArray(raw)) return { results: raw, extras: null };
+  if (raw && typeof raw === 'object' && Array.isArray(raw.results)) {
+    return { results: raw.results, extras: raw.extras || null };
+  }
+  return { results: [], extras: null };
+}
+
 async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug, proxy, start }) {
   const t0 = Date.now();
-  const google = engine === 'google' || engine === 'chrome' || engine === 'google_lite';
+  const google = engine === 'google' || engine === 'google_lite' || engine === 'chrome';
 
   if (google || process.env.VERCEL) await g.attachRoutes(page);
 
@@ -32,7 +40,7 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug, pr
     }
   }
 
-  if (google && String(process.env.GOOGLE_HOME_WARMUP || '0') === '1' && !(cfg && cfg.skipHome)) {
+  if (engine === 'google' && String(process.env.GOOGLE_HOME_WARMUP || '0') === '1' && !(cfg && cfg.skipHome)) {
     await page
       .goto(`https://www.google.com/?hl=${encodeURIComponent(hl)}&gl=${encodeURIComponent(gl)}`, {
         waitUntil: 'domcontentloaded',
@@ -40,7 +48,7 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug, pr
       })
       .catch(() => {});
   }
-  if (engine === 'mojeek' && String(process.env.MOJEEK_HOME_WARMUP || '0') === '1' && !(cfg && cfg.skipHome)) {
+  if (engine === 'mojeek' && String(process.env.MOJEEK_HOME_WARMUP || '1') !== '0' && !(cfg && cfg.skipHome)) {
     await page.goto('https://www.mojeek.com/', { waitUntil: 'domcontentloaded', timeout: 8000 }).catch(() => {});
   }
 
@@ -113,16 +121,12 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug, pr
       const delay = g.postReadyDelayMs(hasH3);
       if (delay) await page.waitForTimeout(delay);
     } else {
-      await page.waitForTimeout(engine === 'brave' || engine === 'startpage' ? 900 : 200);
+      const jsWait = { brave: 1600, startpage: 900, qwant: 1600, ecosia: 1400, yandex: 1600, mojeek: 800 };
+      await page.waitForTimeout(jsWait[engine] || 200);
     }
   }
 
   const block = await page.evaluate(detectBlock, engine).catch(() => null);
-  if (block) {
-    const e = new Error(`Engine "${engine}" blocked the browser render: ${block}`);
-    e.code = 'BLOCKED';
-    throw e;
-  }
 
   if (google && !navError) {
     const soft = await page
@@ -140,9 +144,12 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug, pr
   }
 
   let clean = [];
+  let extras = null;
   if (!navError) {
     for (let pass = 0; pass <= (cfg.scroll || 0); pass++) {
-      let results = await page.evaluate(cfg.parse).catch(() => []);
+      const pack = unpackParse(await page.evaluate(cfg.parse).catch(() => []));
+      let results = pack.results;
+      if (pack.extras && !extras) extras = pack.extras;
       if (google) {
         if (g.followGoto()) results = await resolveGoogleRedirects(context, results, num * 2);
         results = g.filterResults(results);
@@ -150,6 +157,40 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug, pr
       clean = (Array.isArray(results) ? results : []).filter(
         (r) => r && /^https?:\/\//i.test(r.url || '') && (r.title || '').trim()
       );
+      if (clean.length === 0 && !block && engine !== 'mojeek' && !google) {
+        const harvested = await page
+          .evaluate((selfHost) => {
+            const skip = new Set(['', 'javascript:void(0)']);
+            const out = [];
+            const seen = new Set();
+            document.querySelectorAll('a[href^="http"]').forEach((a) => {
+              if (a.closest('nav, header, footer, [role="navigation"]')) return;
+              const url = a.getAttribute('href') || '';
+              if (!/^https?:\/\//i.test(url) || seen.has(url)) return;
+              let host = '';
+              try {
+                host = new URL(url).hostname;
+              } catch {
+                return;
+              }
+              if (selfHost && (host === selfHost || host.endsWith('.' + selfHost))) return;
+              if (/altcha\.org$/i.test(host)) return;
+              const title = (a.textContent || '').replace(/\s+/g, ' ').trim();
+              if (!title || title.length < 3) return;
+              seen.add(url);
+              out.push({ title, url, snippet: '' });
+            });
+            return out;
+          }, (() => {
+            try {
+              return new URL(cfg.url).hostname.replace(/^www\./, '');
+            } catch {
+              return '';
+            }
+          })())
+          .catch(() => []);
+        if (Array.isArray(harvested) && harvested.length) clean = harvested;
+      }
       if (clean.length > 0 || pass === (cfg.scroll || 0)) break;
       await page.evaluate(() => window.scrollBy(0, window.innerHeight * 2));
       await page.waitForTimeout(800);
@@ -162,7 +203,9 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug, pr
       if (delay) await page.waitForTimeout(delay);
       const block2 = await page.evaluate(detectBlock, engine).catch(() => null);
       if (!block2) {
-        let results = await page.evaluate(cfg.parse).catch(() => []);
+        const pack2 = unpackParse(await page.evaluate(cfg.parse).catch(() => []));
+        let results = pack2.results;
+        if (pack2.extras && !extras) extras = pack2.extras;
         if (g.followGoto()) results = await resolveGoogleRedirects(context, results, num * 2);
         results = g.filterResults(results);
         clean = (Array.isArray(results) ? results : []).filter(
@@ -190,7 +233,7 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug, pr
         excerpt = (
           await page.evaluate(() => (document.body ? document.body.innerText : '').replace(/\s+/g, ' ').trim())
         ).slice(0, 240);
-        if (google) {
+        if (engine === 'google') {
           const dom = await page.evaluate(() => {
             const el = document.querySelector('#search, #rso, #main');
             return el ? el.innerHTML.replace(/\s+/g, ' ').slice(0, 900) : '';
@@ -203,9 +246,11 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug, pr
     }
     const reason = navError
       ? `navigation failed: ${navError.message}`
-      : `no result nodes found after render${excerpt ? ` (page text: ${excerpt})` : ''}`;
+      : block
+        ? `blocked: ${block}`
+        : `no result nodes found after render${excerpt ? ` (page text: ${excerpt})` : ''}`;
     const e = new Error(`Engine "${engine}" returned no results after browser render (${reason}).`);
-    e.code = 'EMPTY_RESULTS';
+    e.code = block ? 'BLOCKED' : 'EMPTY_RESULTS';
     throw e;
   }
 
@@ -236,19 +281,19 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug, pr
       .catch(() => '');
   }
 
-  return { results: clean, duration_ms: Date.now() - t0, debugHtml };
+  return { results: clean, duration_ms: Date.now() - t0, debugHtml, extras };
 }
 
 async function runQuery(opts) {
-  const { engine, query, num = 10, start = 0, hl = 'en', gl = 'us', proxy, debug, browser } = opts;
+  const { engine, query, num = 10, start = 0, hl = 'en', gl = 'us', proxy, debug, browser, tbs, before, after } = opts;
   const cfg = ENGINES[engine];
   if (!cfg) {
     const e = new Error(`Unknown engine "${engine}". Available: ${Object.keys(ENGINES).join(', ')}`);
     e.code = 'UNKNOWN_ENGINE';
     throw e;
   }
-  const google = engine === 'google' || engine === 'chrome' || engine === 'google_lite';
-  const url = cfg.url({ q: query, num, start, hl, gl, proxy });
+  const google = engine === 'google' || engine === 'google_lite' || engine === 'chrome';
+  const url = cfg.url({ q: query, num, start, hl, gl, proxy, tbs, before, after });
   const navMs = google ? g.navTimeoutMs() : NAV_TIMEOUT_MS;
 
   const exec = async () =>

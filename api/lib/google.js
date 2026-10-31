@@ -110,7 +110,7 @@ function normalizeQuery(q) {
     .slice(0, intEnv('GOOGLE_Q_MAX', 512));
 }
 
-function buildSearchUrl({ q, num, start, hl, gl, proxy, viewport }) {
+function buildSearchUrl({ q, num, start, hl, gl, proxy, viewport, tbs, before, after }) {
   const geo = resolveGeo({ gl, hl, proxy });
   const query = normalizeQuery(q);
   const p = new URLSearchParams();
@@ -144,6 +144,8 @@ function buildSearchUrl({ q, num, start, hl, gl, proxy, viewport }) {
   }
   if (envFlag('GOOGLE_DPR', false)) p.set('dpr', '1');
   if (envFlag('GOOGLE_SCLIENT', false)) p.set('sclient', 'gws-wiz-serp');
+  const tbsVal = require('./googleExtract').buildTbs({ tbs, before, after });
+  if (tbsVal) p.set('tbs', tbsVal);
   return `https://${geo.host}/search?${p.toString()}`;
 }
 
@@ -159,7 +161,7 @@ function cookiesFor({ sticky } = {}) {
 function decodeHref(href) {
   let url = String(href || '').trim();
   if (!url) return '';
-  if (url.startsWith('/url?') || url.startsWith('/url?')) {
+  if (url.startsWith('/url?') || url.startsWith('/goto?')) {
     try {
       const u = new URL(url, 'https://www.google.com');
       url = u.searchParams.get('q') || u.searchParams.get('url') || url;
@@ -488,11 +490,17 @@ function filterResults(results) {
     if (isAiModeTitle(r.title)) continue;
     const raw = String(r.url || '');
     if (isJunkUrl(raw)) continue;
-    const url = isGoogleRel(raw) ? raw : decodeHref(raw);
+    let url = isGoogleRel(raw) ? raw : decodeHref(raw);
     if (!url || seen.has(url)) continue;
     if (!isGoogleRel(url) && !/^https?:\/\//i.test(url)) continue;
+    if (!isGoogleRel(url)) url = require('./googleExtract').cleanUrl(url) || url;
+    if (seen.has(url)) continue;
     seen.add(url);
-    out.push({ title: String(r.title).trim(), url, snippet: r.snippet ? String(r.snippet).trim() : '' });
+    const item = { title: String(r.title).trim(), url, snippet: r.snippet ? String(r.snippet).trim() : '' };
+    if (r.displayedLink) item.displayedLink = String(r.displayedLink).trim();
+    if (r.date) item.date = String(r.date).trim();
+    if (Array.isArray(r.sitelinks) && r.sitelinks.length) item.sitelinks = r.sitelinks;
+    out.push(item);
   }
   return out;
 }
