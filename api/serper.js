@@ -7,7 +7,7 @@ const { send, cors, authOk } = require('./lib/http');
 const stats = require('./lib/stats');
 const { toSerperBody, parseSerperInput, fallbackEngines } = require('./lib/serperShape');
 const { applyDomainFilters } = require('./lib/resultFilter');
-const { parseDork, adaptQuery, dedupeResults, enforceDork } = require('./lib/dork');
+const { parseDork, adaptQuery, dedupeResults, enforceDork, isHostSiteTarget } = require('./lib/dork');
 
 function usage() {
   return {
@@ -95,9 +95,10 @@ module.exports = async (req, res) => {
       browser: input.browser,
     });
     if (!r || !r.results || !r.results.length) return null;
+    const hostSites = dorkInfo.site_targets.filter(isHostSiteTarget);
     let results = applyDomainFilters(r.results, {
       ...(dorkMode ? { social: true, dev: true } : {}),
-      ...(dorkInfo.site_targets.length ? { allowDomains: dorkInfo.site_targets } : {}),
+      ...(hostSites.length ? { allowDomains: hostSites } : {}),
     });
     if (dorkMode) {
       results = enforceDork(results, dorkInfo);

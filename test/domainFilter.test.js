@@ -48,6 +48,16 @@ test('explicit site target is never filtered out', () => {
   assert.deepEqual(out.map((x) => x.url), ['https://example.com/a', 'https://github.com/org/repo']);
 });
 
+test('TLD allowDomains matches real .com hosts, not via ..tld', () => {
+  const out = applyDomainFilters(list, { social: true, dev: true, allowDomains: ['.com'] });
+  assert.deepEqual(out.map((x) => x.url), [
+    'https://example.com/a',
+    'https://www.facebook.com/x',
+    'https://github.com/org/repo',
+    'https://sub.stackoverflow.com/q/1',
+  ]);
+});
+
 test('exclude_domains matches subdomains', () => {
   const opts = parseResultFilters({ exclude_domains: 'example.com' });
   const out = applyDomainFilters(list, opts);

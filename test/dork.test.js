@@ -10,6 +10,7 @@ const {
   dedupeResults,
   enforceDork,
   hostMatchesSite,
+  isHostSiteTarget,
 } = require('../api/lib/dork');
 
 test('parseDork detects operators, phrases and exclusions', () => {
@@ -72,6 +73,30 @@ test('hostMatchesSite accepts subdomains of the target', () => {
   assert.equal(hostMatchesSite('github.com', 'github.com'), true);
   assert.equal(hostMatchesSite('openai.com', 'github.com'), false);
   assert.equal(hostMatchesSite('notgithub.com', 'github.com'), false);
+});
+
+test('site:.com is a TLD suffix, not a host', () => {
+  const info = parseDork('site:.com USA online store "checkout"');
+  assert.deepEqual(info.site_targets, ['.com']);
+  assert.deepEqual(parseDork('site:*.com checkout').site_targets, ['.com']);
+  assert.equal(isHostSiteTarget('.com'), false);
+  assert.equal(isHostSiteTarget('example.com'), true);
+  assert.equal(isHostSiteTarget('com'), false);
+  assert.equal(hostMatchesSite('shop.example.com', '.com'), true);
+  assert.equal(hostMatchesSite('example.com', '.com'), true);
+  assert.equal(hostMatchesSite('example.co.uk', '.com'), false);
+  assert.equal(hostMatchesSite('notcom.example.net', '.com'), false);
+});
+
+test('enforceDork keeps .com hosts for site:.com', () => {
+  const info = parseDork('site:.com "checkout"');
+  const rows = [
+    { url: 'https://shop.example.com/cart', title: 'ok' },
+    { url: 'https://example.com/checkout', title: 'root' },
+    { url: 'https://example.co.uk/checkout', title: 'uk' },
+    { url: 'https://example.net/checkout', title: 'net' },
+  ];
+  assert.deepEqual(enforceDork(rows, info).map((r) => r.title), ['ok', 'root']);
 });
 
 test('enforceDork drops results outside site: and filetype:', () => {

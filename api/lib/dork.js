@@ -58,7 +58,7 @@ function normalizeSite(value) {
   return unquote(value)
     .replace(/^https?:\/\//i, '')
     .replace(/^www\./i, '')
-    .replace(/^\*\./, '')
+    .replace(/^\*\./, '.')
     .replace(/\/.*$/, '')
     .toLowerCase();
 }
@@ -143,6 +143,13 @@ function canonicalUrl(url) {
   }
 }
 
+function isHostSiteTarget(target) {
+  const t = String(target || '')
+    .toLowerCase()
+    .replace(/^www\./, '');
+  return Boolean(t) && t.includes('.') && !t.startsWith('.');
+}
+
 function hostMatchesSite(host, target) {
   const h = String(host || '')
     .toLowerCase()
@@ -151,6 +158,7 @@ function hostMatchesSite(host, target) {
     .toLowerCase()
     .replace(/^www\./, '');
   if (!h || !t) return false;
+  if (t.startsWith('.')) return h === t.slice(1) || h.endsWith(t);
   return h === t || h.endsWith(`.${t}`);
 }
 
@@ -218,5 +226,6 @@ module.exports = {
   dedupeResults,
   enforceDork,
   hostMatchesSite,
+  isHostSiteTarget,
   CAPABILITY,
 };

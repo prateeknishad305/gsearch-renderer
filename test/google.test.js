@@ -13,6 +13,22 @@ test('google ships 100+ named fixes', () => {
   assert.equal(new Set(g.FIXES).size, g.FIXES.length);
 });
 
+test('as_sitesearch is set for a single host site: target', () => {
+  const u = g.buildSearchUrl({ q: 'site:example.com login', num: 10, start: 0, hl: 'en', gl: 'us' });
+  assert.equal(new URL(u).searchParams.get('as_sitesearch'), 'example.com');
+});
+
+test('as_sitesearch is omitted for TLD site:.com', () => {
+  const u = g.buildSearchUrl({
+    q: 'site:.com USA online store "checkout"',
+    num: 10,
+    start: 0,
+    hl: 'en',
+    gl: 'us',
+  });
+  assert.equal(new URL(u).searchParams.get('as_sitesearch'), null);
+});
+
 test('google URL is classic search and omits num=10', () => {
   const u = ENGINES.google.url({ q: 'hello world', num: 100, start: 10, hl: 'en', gl: 'us' });
   const p = new URL(u).searchParams;

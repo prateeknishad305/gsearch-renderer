@@ -27,7 +27,7 @@ const { sweepIdle } = require('./lib/browserPool');
 const { send, cors, authOk, unauthorized, maskProxy } = require('./lib/http');
 const { parseShodanOptions, applyShodanOptions, active: shodanOptionsActive } = require('./lib/shodanQuery');
 const { parseResultFilters, applyDomainFilters } = require('./lib/resultFilter');
-const { parseDork, engineSupport, adaptQuery, dedupeResults, enforceDork } = require('./lib/dork');
+const { parseDork, engineSupport, adaptQuery, dedupeResults, enforceDork, isHostSiteTarget } = require('./lib/dork');
 const circuit = require('./lib/circuit');
 const stats = require('./lib/stats');
 const g = require('./lib/google');
@@ -282,8 +282,7 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
   if (tryLite && Date.now() + 2500 < deadline) {
     liteAttempted = true;
     try {
-      const liteEngine = engine === 'google' ? 'google_lite' : engine;
-      const lite = await fastLiteSearch({ engine: liteEngine, query, num: cap, hl, gl, start, tbs, before, after });
+      const lite = await fastLiteSearch({ engine, query, num: cap, hl, gl, start, tbs, before, after });
       if (lite.results && lite.results.length) {
         circuit.record(engine, 'OK');
         return {
@@ -297,15 +296,15 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
           extras: lite.extras || null,
         };
       }
-      } catch (err) {
-        if (liteOnly || skipRender(engine)) {
-          if (err && err.code) throw err;
-          const e = new Error(`Engine "${engine}" lite path empty`);
-          e.code = 'LITE_EMPTY';
-          throw e;
-        }
+    } catch (err) {
+      if (liteOnly || skipRender(engine) || (engine !== 'google' && isHardBlock(err))) {
+        if (err && err.code) throw err;
+        const e = new Error(`Engine "${engine}" lite path empty`);
+        e.code = 'LITE_EMPTY';
+        throw e;
       }
-   }
+    }
+  }
    if (liteOnly || skipRender(engine)) {
      const e = new Error(`Engine "${engine}" has no lite results`);
      e.code = 'LITE_EMPTY';
@@ -615,9 +614,10 @@ async function handleSearch(req, res) {
     if (resultFilters.social === undefined) resultFilters.social = true;
     if (resultFilters.dev === undefined) resultFilters.dev = true;
   }
-  if (dorkInfo.site_targets.length) {
+  const hostSiteTargets = dorkInfo.site_targets.filter(isHostSiteTarget);
+  if (hostSiteTargets.length) {
     resultFilters.allowDomains = Array.from(
-      new Set([...(resultFilters.allowDomains || []), ...dorkInfo.site_targets])
+      new Set([...(resultFilters.allowDomains || []), ...hostSiteTargets])
     );
   }
   const useCache = req.query.nocache !== '1' && !debug && !explain && !proxy && !proxyless;
@@ -635,7 +635,7 @@ async function handleSearch(req, res) {
 
   const cache = getCache();
   const cacheKey = JSON.stringify([
-    'v8',
+    'v9',
     engineList.join(','),
     mode,
     q,

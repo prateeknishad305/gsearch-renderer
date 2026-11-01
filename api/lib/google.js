@@ -3,7 +3,7 @@
 const net = require('net');
 const { URL } = require('url');
 const { isGarbageUrl, isAiModeTitle } = require('./resultFilter');
-const { parseDork } = require('./dork');
+const { parseDork, isHostSiteTarget } = require('./dork');
 
 function envFlag(name, dflt) {
   const raw = process.env[name];
@@ -118,7 +118,9 @@ function buildSearchUrl({ q, num, start, hl, gl, proxy, viewport, tbs, before, a
   p.set('hl', geo.hl);
   p.set('gl', geo.gl);
   const siteTargets = parseDork(query).site_targets;
-  if (siteTargets.length === 1) p.set('as_sitesearch', siteTargets[0]);
+  if (siteTargets.length === 1 && isHostSiteTarget(siteTargets[0])) {
+    p.set('as_sitesearch', siteTargets[0]);
+  }
   const st = Math.max(0, Number(start) || 0);
   p.set('start', String(st));
   const n = Math.min(10, Math.max(1, Number(num) || 10));

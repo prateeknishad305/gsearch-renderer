@@ -58,20 +58,36 @@ const ENDPOINTS = {
     return `https://www.startpage.com/sp/search?${p.toString()}`;
   },
   google_lite: ({ q, s, gl, hl, tbs, before, after }) => {
+    const p = new URLSearchParams({
+      q,
+      hl: hl || 'en',
+      gl: gl || 'us',
+      start: String(s || 0),
+      gbv: '2',
+    });
     try {
-      return require('./google').buildSearchUrl({ q, num: 10, start: s || 0, hl, gl, tbs, before, after });
+      const tbsVal = require('./googleExtract').buildTbs({ tbs, before, after });
+      if (tbsVal) p.set('tbs', tbsVal);
     } catch {
-      const p = new URLSearchParams({ q, hl: hl || 'en', gl: gl || 'us', start: String(s || 0) });
-      return `https://www.google.com/search?${p.toString()}`;
+      /* ignore */
     }
+    return `https://www.google.com/search?${p.toString()}`;
   },
   google: ({ q, s, gl, hl, tbs, before, after }) => {
+    const p = new URLSearchParams({
+      q,
+      hl: hl || 'en',
+      gl: gl || 'us',
+      start: String(s || 0),
+      gbv: '2',
+    });
     try {
-      return require('./google').buildSearchUrl({ q, num: 10, start: s || 0, hl, gl, tbs, before, after });
+      const tbsVal = require('./googleExtract').buildTbs({ tbs, before, after });
+      if (tbsVal) p.set('tbs', tbsVal);
     } catch {
-      const p = new URLSearchParams({ q, hl: hl || 'en', gl: gl || 'us', start: String(s || 0) });
-      return `https://www.google.com/search?${p.toString()}`;
+      /* ignore */
     }
+    return `https://www.google.com/search?${p.toString()}`;
   },
   archive: ({ q, s, num }) => {
     const rows = Math.min(50, Math.max(1, Number(num) || 10));
@@ -741,7 +757,30 @@ async function fetchLitePage(url, engine) {
     'accept-language': 'en-US,en;q=0.9',
     accept: JSON_ENGINES.has(engine) ? 'application/json' : 'text/html,application/xhtml+xml',
   };
-  if (engine === 'google' || engine === 'google_lite' || engine === 'mojeek') {
+  if (engine === 'google' || engine === 'google_lite') {
+    try {
+      return { html: await raceProxyFetch(url, engine, 2200) };
+    } catch {
+      /* DC race failed — fall through to direct IP */
+    }
+    try {
+      return { html: await fetchDirect(url, engine, headers) };
+    } catch (directErr) {
+      if (engine === 'google_lite') {
+        try {
+          return await fetchChromeGoogle(url, engine);
+        } catch (chromeErr) {
+          const e = new Error(`Lite fetch failed: ${(chromeErr && chromeErr.message) || (directErr && directErr.message) || 'chrome'}`);
+          e.code = (chromeErr && chromeErr.code) || (directErr && directErr.code) || 'LITE_FETCH_ERROR';
+          throw e;
+        }
+      }
+      const e = new Error(`Lite fetch failed: ${(directErr && directErr.message) || 'direct'}`);
+      e.code = (directErr && directErr.code) || 'LITE_FETCH_ERROR';
+      throw e;
+    }
+  }
+  if (engine === 'mojeek') {
     try {
       return await fetchChromeGoogle(url, engine);
     } catch (err) {

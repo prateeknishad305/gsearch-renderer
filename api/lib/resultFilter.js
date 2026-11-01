@@ -4,6 +4,8 @@
 // friends) and AI Mode / AI Overview chrome. Defaults are ON; disable with
 // FILTER_VIDEO=0 or FILTER_AI_MODE=0.
 
+const { hostMatchesSite } = require('./dork');
+
 function envOn(name, dflt) {
   const v = process.env[name];
   if (v == null || v === '') return dflt;
@@ -133,11 +135,11 @@ function applyDomainFilters(list, opts = {}) {
   return list.filter((r) => {
     const host = hostOf(r && r.url);
     if (!host) return true;
-    if (allowed.some((d) => host === d || host.endsWith(`.${d}`))) return true;
+    if (allowed.some((d) => hostMatchesSite(host, d))) return true;
     if (useSocial && isSocialHost(host)) return false;
     if (useDev && isDevHost(host)) return false;
     for (const d of blocked) {
-      if (host === d || host.endsWith(`.${d}`)) return false;
+      if (hostMatchesSite(host, d)) return false;
     }
     return true;
   });
