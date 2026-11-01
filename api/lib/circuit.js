@@ -35,13 +35,9 @@ function record(engine, code) {
     s.skip_until = 0;
     return;
   }
-  if (code === 'BLOCKED') s.blocked += 1;
-  else if (code === 'EMPTY_RESULTS') s.empty += 1;
+  if (code === 'BLOCKED' || code === 'SORRY') s.blocked += 1;
+  else if (code === 'EMPTY_RESULTS' || code === 'LITE_EMPTY') s.empty += 1;
   else s.error += 1;
-  if (code === 'BLOCKED' || code === 'SORRY' || code === 'EMPTY_RESULTS' || code === 'LITE_EMPTY') {
-    s.consecutive_fail = 0;
-    return;
-  }
   s.consecutive_fail += 1;
   if (s.consecutive_fail >= OPEN_AFTER) s.skip_until = Date.now() + OPEN_MS;
 }
