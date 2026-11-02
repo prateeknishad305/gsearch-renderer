@@ -163,13 +163,22 @@ function cookiesFor({ sticky } = {}) {
 function decodeHref(href) {
   let url = String(href || '').trim();
   if (!url) return '';
-  if (url.startsWith('/url?') || url.startsWith('/goto?')) {
+  for (let i = 0; i < 4; i++) {
+    const rel = url.startsWith('/url?') || url.startsWith('/goto?');
     try {
-      const u = new URL(url, 'https://www.google.com');
-      url = u.searchParams.get('q') || u.searchParams.get('url') || url;
+      const abs = rel ? new URL(url, 'https://www.google.com') : new URL(url);
+      const host = String(abs.hostname || '').toLowerCase();
+      const google = host === 'google.com' || host.endsWith('.google.com');
+      if (rel || (google && /^\/(?:url|goto)\/?$/i.test(abs.pathname || ''))) {
+        const next = abs.searchParams.get('url') || abs.searchParams.get('q') || abs.searchParams.get('u') || '';
+        if (!next || next === url) break;
+        url = next;
+        continue;
+      }
     } catch {
       /* keep */
     }
+    break;
   }
   return url;
 }

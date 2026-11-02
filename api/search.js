@@ -613,6 +613,9 @@ async function handleSearch(req, res) {
   if (dorkMode) {
     if (resultFilters.social === undefined) resultFilters.social = true;
     if (resultFilters.dev === undefined) resultFilters.dev = true;
+    if (resultFilters.ugc === undefined) resultFilters.ugc = true;
+    if (resultFilters.forum === undefined) resultFilters.forum = true;
+    if (resultFilters.blog === undefined) resultFilters.blog = true;
   }
   const hostSiteTargets = dorkInfo.site_targets.filter(isHostSiteTarget);
   if (hostSiteTargets.length) {
@@ -635,7 +638,7 @@ async function handleSearch(req, res) {
 
   const cache = getCache();
   const cacheKey = JSON.stringify([
-    'v9',
+    'v10',
     engineList.join(','),
     mode,
     q,
@@ -755,24 +758,20 @@ async function handleSearch(req, res) {
       results = applyDomainFilters(results, resultFilters);
       if (dorkMode) results = enforceDork(results, dorkInfo);
       if (wantDedupe) results = dedupeResults(results, num);
-      if (
-        results.length === 0 &&
-        dorkMode &&
-        (dorkInfo.site_targets.length || (dorkInfo.operators.filetype || []).length)
-      ) {
+      if (results.length === 0) {
         attemptsDetail.push({
           engine,
           success: false,
           code: 'EMPTY_RESULTS',
           duration_ms: r.duration_ms,
         });
-        lastErr = Object.assign(new Error('No results matched dork constraints'), { code: 'EMPTY_RESULTS' });
+        lastErr = Object.assign(new Error('No results matched'), { code: 'EMPTY_RESULTS' });
         continue;
       }
       attemptsDetail.push({
         engine,
-        success: results.length > 0,
-        code: results.length ? 'OK' : 'EMPTY_RESULTS',
+        success: true,
+        code: 'OK',
         duration_ms: r.duration_ms,
       });
       const body = {

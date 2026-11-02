@@ -64,6 +64,10 @@ test('preferHttp rewrites socks5', () => {
 test('decodeHref reads /url?q= and /url?url=', () => {
   assert.equal(g.decodeHref('/url?q=https://example.com/a'), 'https://example.com/a');
   assert.equal(g.decodeHref('/url?url=https://example.com/b'), 'https://example.com/b');
+  assert.equal(
+    g.decodeHref('https://www.google.com/url?url=https://shop.example.com/cart/checkout&sa=t'),
+    'https://shop.example.com/cart/checkout'
+  );
 });
 
 test('junk urls drop imgres aclk webcache gstatic ads but keep /goto /url', () => {

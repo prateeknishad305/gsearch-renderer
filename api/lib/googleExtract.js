@@ -42,17 +42,43 @@ function cleanUrl(url) {
   }
 }
 
-function decodeGoogleHref(href) {
+function isGoogleHost(host) {
+  const h = String(host || '').toLowerCase();
+  return h === 'google.com' || h.endsWith('.google.com');
+}
+
+function unwrapGoogleHref(href) {
   let url = decodeEntities(String(href || '').trim());
+  if (!url) return '';
   if (url.startsWith('//')) url = `https:${url}`;
-  if (url.startsWith('/url?') || url.startsWith('/goto?')) {
+  for (let i = 0; i < 4; i++) {
+    let next = '';
     try {
-      const u = new URL(url, 'https://www.google.com');
-      url = u.searchParams.get('q') || u.searchParams.get('url') || '';
+      const rel = url.startsWith('/url?') || url.startsWith('/goto?');
+      const abs = rel ? new URL(url, 'https://www.google.com') : new URL(url);
+      const path = abs.pathname || '';
+      if (rel || (isGoogleHost(abs.hostname) && /^\/(?:url|goto)\/?$/i.test(path))) {
+        next = abs.searchParams.get('url') || abs.searchParams.get('q') || abs.searchParams.get('u') || '';
+      }
     } catch {
-      url = '';
+      break;
     }
+    if (!next) break;
+    try {
+      next = decodeURIComponent(next);
+    } catch {
+      /* keep */
+    }
+    next = decodeEntities(next).trim();
+    if (next.startsWith('//')) next = `https:${next}`;
+    if (!next || next === url) break;
+    url = next;
   }
+  return url;
+}
+
+function decodeGoogleHref(href) {
+  let url = unwrapGoogleHref(href);
   try {
     url = decodeURIComponent(url);
   } catch {
@@ -62,8 +88,7 @@ function decodeGoogleHref(href) {
   try {
     const h = new URL(url).hostname;
     if (
-      h === 'google.com' ||
-      h.endsWith('.google.com') ||
+      isGoogleHost(h) ||
       /googleusercontent\.com$|gstatic\.com$|googleadservices\.com$/i.test(h)
     ) {
       return '';
@@ -84,9 +109,18 @@ function hostLooksReal(host) {
 function citeToUrl(cite) {
   let t = decodeEntities(stripTags(cite)).replace(/\s+/g, ' ').trim();
   if (!t) return '';
-  const parts = t.split(/\s*›\s*/).map((s) => s.trim()).filter((s) => s && s !== '...');
+  if (/^https?:\/\//i.test(t) && !/[›>]/.test(t)) {
+    const direct = decodeGoogleHref(t) || cleanUrl(t);
+    if (direct && !skipHost(direct)) return direct;
+  }
+  const parts = t.split(/\s*[›>]\s*/).map((s) => s.trim()).filter((s) => s && s !== '...');
   let hostPart = parts[0] || '';
   if (!hostPart) return '';
+  const hostHasScheme = /^https?:\/\//i.test(hostPart);
+  if (hostHasScheme && parts.length === 1) {
+    const direct = decodeGoogleHref(hostPart) || cleanUrl(hostPart);
+    if (direct && !skipHost(direct)) return direct;
+  }
   hostPart = hostPart.replace(/^https?:\/\//i, '').split('/')[0];
   if (!hostLooksReal(hostPart)) return '';
   const pathParts = parts.slice(1).map((p) => p.replace(/^\/+/, '')).filter(Boolean);
@@ -281,15 +315,32 @@ function pagePack() {
   }
 
   function decodeHref(href) {
-    let url = String(href || '').trim();
+    let url = String(href || '').trim().replace(/&amp;/g, '&');
     if (url.startsWith('//')) url = `https:${url}`;
-    if (url.startsWith('/url?') || url.startsWith('/goto?')) {
+    for (let i = 0; i < 4; i++) {
+      let next = '';
       try {
-        const u = new URL(url, 'https://www.google.com');
-        url = u.searchParams.get('q') || u.searchParams.get('url') || '';
+        const rel = url.startsWith('/url?') || url.startsWith('/goto?');
+        const abs = rel ? new URL(url, 'https://www.google.com') : new URL(url);
+        const path = abs.pathname || '';
+        const host = String(abs.hostname || '').toLowerCase();
+        const google = host === 'google.com' || host.endsWith('.google.com');
+        if (rel || (google && /^\/(?:url|goto)\/?$/i.test(path))) {
+          next = abs.searchParams.get('url') || abs.searchParams.get('q') || abs.searchParams.get('u') || '';
+        }
       } catch {
-        url = '';
+        break;
       }
+      if (!next) break;
+      try {
+        next = decodeURIComponent(next);
+      } catch {
+        /* keep */
+      }
+      next = String(next || '').trim().replace(/&amp;/g, '&');
+      if (next.startsWith('//')) next = `https:${next}`;
+      if (!next || next === url) break;
+      url = next;
     }
     try {
       url = decodeURIComponent(url);
@@ -321,8 +372,16 @@ function pagePack() {
   function citeToUrl(cite) {
     const t = String(cite || '').replace(/\s+/g, ' ').trim();
     if (!t) return '';
-    const parts = t.split(/\s*›\s*/).map((s) => s.trim()).filter((s) => s && s !== '...');
+    if (/^https?:\/\//i.test(t) && !/[›>]/.test(t)) {
+      const direct = decodeHref(t) || clean(t);
+      if (direct) return direct;
+    }
+    const parts = t.split(/\s*[›>]\s*/).map((s) => s.trim()).filter((s) => s && s !== '...');
     if (!parts[0]) return '';
+    if (/^https?:\/\//i.test(parts[0]) && parts.length === 1) {
+      const direct = decodeHref(parts[0]) || clean(parts[0]);
+      if (direct) return direct;
+    }
     const host = parts[0].replace(/^https?:\/\//i, '').split('/')[0];
     if (!hostLooksReal(host)) return '';
     const path = parts.slice(1).map((p) => p.replace(/^\/+/, '')).filter(Boolean);
@@ -487,6 +546,7 @@ function buildTbs({ tbs, before, after } = {}) {
 
 module.exports = {
   cleanUrl,
+  unwrapGoogleHref,
   decodeGoogleHref,
   citeToUrl,
   extractFromHtml,

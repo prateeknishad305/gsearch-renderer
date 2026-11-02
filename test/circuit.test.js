@@ -131,3 +131,21 @@ test('google lite parser reads h3/url?q=', () => {
   assert.equal(p.get('start'), '10');
   assert.equal(p.get('udm'), null);
 });
+
+test('google extract unwraps absolute /url?url= and keeps full path', () => {
+  const { decodeGoogleHref, extractFromHtml } = require('../api/lib/googleExtract');
+  assert.equal(
+    decodeGoogleHref('https://www.google.com/url?url=https://shop.example.com/cart/checkout&sa=t'),
+    'https://shop.example.com/cart/checkout'
+  );
+  assert.equal(
+    decodeGoogleHref('/url?q=https%3A%2F%2Fshop.example.com%2Fcart%2Fcheckout&sa=U'),
+    'https://shop.example.com/cart/checkout'
+  );
+  const html =
+    '<div class="g"><a href="https://www.google.com/url?url=https://shop.example.com/cart/checkout&amp;sa=t"><h3>Checkout</h3></a>' +
+    '<cite>https://shop.example.com › cart › checkout</cite></div>';
+  const out = extractFromHtml(html);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].url, 'https://shop.example.com/cart/checkout');
+});

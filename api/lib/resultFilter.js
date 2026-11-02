@@ -70,7 +70,21 @@ const SOCIAL_HOST =
 // Developer/docs/tutorial hosts. OFF by default; enable with FILTER_DEV=1,
 // ?dev=1 or ?unique=1.
 const DEV_HOST =
-  /(?:^|\.)(?:github\.com|gitlab\.com|bitbucket\.org|stackoverflow\.com|stackexchange\.com|superuser\.com|serverfault\.com|npmjs\.com|pypi\.org|packagist\.org|rubygems\.org|crates\.io|nuget\.org|dev\.to|hashnode\.com|mdn\.mozilla\.org|w3schools\.com|geeksforgeeks\.org|tutorialspoint\.com|javatpoint\.com|baeldung\.com|freecodecamp\.org|codecademy\.com|leetcode\.com|hackerrank\.com|sourceforge\.net|readthedocs\.io|gitbook\.io|devdocs\.io|docs\.rs|pkg\.go\.dev|godoc\.org|rubydoc\.info|cppreference\.com|learn\.microsoft\.com)$/i;
+  /(?:^|\.)(?:github\.com|gitlab\.com|bitbucket\.org|stackoverflow\.com|stackexchange\.com|superuser\.com|serverfault\.com|npmjs\.com|pypi\.org|packagist\.org|rubygems\.org|crates\.io|nuget\.org|dev\.to|hashnode\.com|mdn\.mozilla\.org|w3schools\.com|geeksforgeeks\.org|tutorialspoint\.com|javatpoint\.com|baeldung\.com|freecodecamp\.org|codecademy\.com|leetcode\.com|hackerrank\.com|sourceforge\.net|readthedocs\.io|gitbook\.io|devdocs\.io|docs\.rs|pkg\.go\.dev|godoc\.org|rubydoc\.info|cppreference\.com|learn\.microsoft\.com|pastebin\.com|gist\.github\.com|codesandbox\.io|jsfiddle\.net|codepen\.io)$/i;
+
+// Document mills / reference dumps. OFF by default; ?ugc=1 or ?unique=1.
+const UGC_HOST =
+  /(?:^|\.)(?:scribd\.com|slideshare\.net|issuu\.com|academia\.edu|researchgate\.net|fandom\.com|wikipedia\.org|wikihow\.com|about\.me|linktr\.ee|hubpages\.com|vocal\.media|answers\.com|ask\.com|ehow\.com|genius\.com)$/i;
+
+// Known blog platforms. OFF by default; ?blog=1 or ?unique=1.
+const BLOG_HOST =
+  /(?:^|\.)(?:blogspot\.com|blogger\.com|wordpress\.com|substack\.com|ghost\.io|tumblr\.com|livejournal\.com|typepad\.com|weebly\.com|wixsite\.com|medium\.com)$/i;
+
+// Forum software / communities. OFF by default; ?forum=1 or ?unique=1.
+const FORUM_HOST =
+  /(?:^|\.)(?:discourse\.org|phpbb\.com|vbulletin\.com|xenforo\.com|groups\.google\.com|4chan\.org|4channel\.org|lemmy\.world|kbin\.social|discourse\.group)$/i;
+const FORUM_PATH =
+  /(?:showthread|viewtopic|viewforum|showpost)\.php|(?:^|\/)(?:forums?|boards?|community\/(?:threads?|posts?)|threads?|topic\/|t-\d)/i;
 
 function dropSocial() {
   return envOn('FILTER_SOCIAL', true);
@@ -78,6 +92,18 @@ function dropSocial() {
 
 function dropDev() {
   return envOn('FILTER_DEV', false);
+}
+
+function dropUgc() {
+  return envOn('FILTER_UGC', false);
+}
+
+function dropForum() {
+  return envOn('FILTER_FORUM', false);
+}
+
+function dropBlog() {
+  return envOn('FILTER_BLOG', false);
 }
 
 function hostOf(url) {
@@ -96,6 +122,32 @@ function isDevHost(host) {
   return DEV_HOST.test(String(host || ''));
 }
 
+function isUgcHost(host) {
+  return UGC_HOST.test(String(host || ''));
+}
+
+function isBlogHost(host) {
+  return BLOG_HOST.test(String(host || ''));
+}
+
+function isForumHost(host) {
+  return FORUM_HOST.test(String(host || ''));
+}
+
+function isForumUrl(url) {
+  try {
+    const u = new URL(String(url || ''));
+    if (isForumHost(u.hostname)) return true;
+    return FORUM_PATH.test(`${u.pathname}${u.search}`);
+  } catch {
+    return false;
+  }
+}
+
+function isBlogUrl(url) {
+  return isBlogHost(hostOf(url));
+}
+
 function parseResultFilters(query = {}) {
   const opts = {};
   const unique = query.unique === '1' || query.unique === 'true';
@@ -109,13 +161,25 @@ function parseResultFilters(query = {}) {
   if (unique) {
     opts.social = true;
     opts.dev = true;
+    opts.ugc = true;
+    opts.forum = true;
+    opts.blog = true;
   }
   if (exclude.has('social')) opts.social = true;
   if (exclude.has('dev')) opts.dev = true;
+  if (exclude.has('ugc')) opts.ugc = true;
+  if (exclude.has('forum')) opts.forum = true;
+  if (exclude.has('blog')) opts.blog = true;
   if (query.social === '0' || query.social === 'false') opts.social = false;
   if (query.social === '1' || query.social === 'true') opts.social = true;
   if (query.dev === '0' || query.dev === 'false') opts.dev = false;
   if (query.dev === '1' || query.dev === 'true') opts.dev = true;
+  if (query.ugc === '0' || query.ugc === 'false') opts.ugc = false;
+  if (query.ugc === '1' || query.ugc === 'true') opts.ugc = true;
+  if (query.forum === '0' || query.forum === 'false') opts.forum = false;
+  if (query.forum === '1' || query.forum === 'true') opts.forum = true;
+  if (query.blog === '0' || query.blog === 'false') opts.blog = false;
+  if (query.blog === '1' || query.blog === 'true') opts.blog = true;
   const domains = String(query.exclude_domains || '')
     .toLowerCase()
     .split(',')
@@ -129,15 +193,22 @@ function applyDomainFilters(list, opts = {}) {
   if (!Array.isArray(list)) return list;
   const useSocial = opts.social === undefined ? dropSocial() : opts.social;
   const useDev = opts.dev === undefined ? dropDev() : opts.dev;
+  const useUgc = opts.ugc === undefined ? dropUgc() : opts.ugc;
+  const useForum = opts.forum === undefined ? dropForum() : opts.forum;
+  const useBlog = opts.blog === undefined ? dropBlog() : opts.blog;
   const blocked = (opts.excludeDomains || []).map((d) => String(d).toLowerCase());
   const allowed = (opts.allowDomains || []).map((d) => String(d).toLowerCase());
-  if (!useSocial && !useDev && !blocked.length) return list;
+  if (!useSocial && !useDev && !useUgc && !useForum && !useBlog && !blocked.length) return list;
   return list.filter((r) => {
-    const host = hostOf(r && r.url);
+    const url = String((r && r.url) || '');
+    const host = hostOf(url);
     if (!host) return true;
     if (allowed.some((d) => hostMatchesSite(host, d))) return true;
     if (useSocial && isSocialHost(host)) return false;
     if (useDev && isDevHost(host)) return false;
+    if (useUgc && isUgcHost(host)) return false;
+    if (useForum && isForumUrl(url)) return false;
+    if (useBlog && isBlogUrl(url)) return false;
     for (const d of blocked) {
       if (hostMatchesSite(host, d)) return false;
     }
@@ -161,16 +232,27 @@ module.exports = {
   AI_TOKENS,
   SOCIAL_HOST,
   DEV_HOST,
+  UGC_HOST,
+  BLOG_HOST,
+  FORUM_HOST,
   dropVideo,
   dropAiMode,
   dropSocial,
   dropDev,
+  dropUgc,
+  dropForum,
+  dropBlog,
   isVideoUrl,
   isAiModeTitle,
   isGarbageUrl,
   isGarbageResult,
   isSocialHost,
   isDevHost,
+  isUgcHost,
+  isBlogHost,
+  isForumHost,
+  isForumUrl,
+  isBlogUrl,
   cleanResults,
   parseResultFilters,
   applyDomainFilters,
