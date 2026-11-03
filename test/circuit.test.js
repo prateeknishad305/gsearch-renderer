@@ -149,3 +149,14 @@ test('google extract unwraps absolute /url?url= and keeps full path', () => {
   assert.equal(out.length, 1);
   assert.equal(out[0].url, 'https://shop.example.com/cart/checkout');
 });
+
+test('google extract recovers Index of path from title when cite is truncated', () => {
+  const { extractFromHtml } = require('../api/lib/googleExtract');
+  const html =
+    '<div class="g"><a href="https://www.google.com/url?url=https://www.vaughn.edu/wp-content/backup&amp;sa=t" ping="/url?url=https://www.vaughn.edu/wp-content/uploads/backup">' +
+    '<h3>Index of /wp-content/uploads/backup</h3></a>' +
+    '<cite>https://www.vaughn.edu › wp-content › backup</cite></div>';
+  const out = extractFromHtml(html);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].url, 'https://www.vaughn.edu/wp-content/uploads/backup');
+});

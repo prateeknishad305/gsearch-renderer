@@ -106,6 +106,45 @@ function hostLooksReal(host) {
   return /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}$/i.test(h) && !/\s/.test(h) && h.length < 80;
 }
 
+function indexOfPath(title) {
+  const m = String(title || '').match(/^index\s+of\s+(\/[\w.~+/-]*)/i);
+  if (!m) return '';
+  let path = m[1].replace(/\/{2,}/g, '/');
+  if (path.length > 1) path = path.replace(/\/+$/, '');
+  return path;
+}
+
+function expandIndexOfUrl(url, title) {
+  const path = indexOfPath(title);
+  if (!url || !path) return url;
+  try {
+    const u = new URL(url);
+    if (!/^https?:$/i.test(u.protocol)) return url;
+    u.pathname = path;
+    u.search = '';
+    u.hash = '';
+    return cleanUrl(u.toString()) || url;
+  } catch {
+    return url;
+  }
+}
+
+function pickBestUrl(candidates) {
+  let best = '';
+  for (const raw of candidates || []) {
+    const parts = String(raw || '')
+      .split(/\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    for (const part of parts) {
+      const url = decodeGoogleHref(part);
+      if (!url || skipHost(url) || isGarbageUrl(url)) continue;
+      if (!best || url.length > best.length) best = url;
+    }
+  }
+  return best;
+}
+
 function citeToUrl(cite) {
   let t = decodeEntities(stripTags(cite)).replace(/\s+/g, ' ').trim();
   if (!t) return '';
@@ -113,7 +152,8 @@ function citeToUrl(cite) {
     const direct = decodeGoogleHref(t) || cleanUrl(t);
     if (direct && !skipHost(direct)) return direct;
   }
-  const parts = t.split(/\s*[›>]\s*/).map((s) => s.trim()).filter((s) => s && s !== '...');
+  const truncated = /\.{3}|…/.test(t);
+  const parts = t.split(/\s*[›>]\s*/).map((s) => s.trim()).filter((s) => s && s !== '...' && s !== '…');
   let hostPart = parts[0] || '';
   if (!hostPart) return '';
   const hostHasScheme = /^https?:\/\//i.test(hostPart);
@@ -123,7 +163,7 @@ function citeToUrl(cite) {
   }
   hostPart = hostPart.replace(/^https?:\/\//i, '').split('/')[0];
   if (!hostLooksReal(hostPart)) return '';
-  const pathParts = parts.slice(1).map((p) => p.replace(/^\/+/, '')).filter(Boolean);
+  const pathParts = truncated ? [] : parts.slice(1).map((p) => p.replace(/^\/+/, '')).filter(Boolean);
   const path = pathParts.length ? `/${pathParts.join('/')}` : '/';
   try {
     const u = new URL(`https://${hostPart.replace(/^\/+/, '')}`);
@@ -168,13 +208,19 @@ function extractFromHtml(html) {
     }
     return out.slice(0, 6);
   }
-  function push(title, href, snippet, cite, date, slHtml) {
+  function attrOf(tag, name) {
+    const re = new RegExp('\\b' + name + '="([^"]+)"', 'i');
+    const m = String(tag || '').match(re);
+    return m ? m[1] : '';
+  }
+  function push(title, href, snippet, cite, date, slHtml, extraHrefs) {
     title = decodeEntities(stripTags(title));
     if (!title || title.length < 3 || title.length > 200) return;
     if (isAiModeTitle(title)) return;
-    let url = decodeGoogleHref(href);
     const displayedLink = displayedFromCite(cite);
+    let url = pickBestUrl([href].concat(extraHrefs || []));
     if (!url && displayedLink) url = citeToUrl(displayedLink);
+    url = expandIndexOfUrl(url, title) || url;
     if (!url || isGarbageUrl(url) || skipHost(url) || seen.has(url)) return;
     seen.add(url);
     const item = { title, url, snippet: decodeEntities(stripTags(snippet || '')) };
@@ -191,29 +237,41 @@ function extractFromHtml(html) {
   let usedBlock = false;
   while ((bm = blockRe.exec(raw))) {
     const block = bm[1];
-    const a = block.match(/<a[^>]+href="([^"]+)"[^>]*>[\s\S]*?<h3[^>]*>([\s\S]*?)<\/h3>/i)
-      || block.match(/<h3[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+    const a = block.match(/<(a\b[^>]*href="([^"]+)"[^>]*)>[\s\S]*?<h3[^>]*>([\s\S]*?)<\/h3>/i)
+      || block.match(/<h3[^>]*>[\s\S]*?<(a\b[^>]*href="([^"]+)"[^>]*)>([\s\S]*?)<\/a>/i);
     if (!a) continue;
     usedBlock = true;
     const cite = ((block.match(/<cite[^>]*>([\s\S]*?)<\/cite>/i) || [])[1]) || '';
     const sn = ((block.match(/<(?:div|span)[^>]*class="[^"]*(?:VwiC3b|aCOpRe|MUxGbd|IsZvec)[^"]*"[^>]*>([\s\S]*?)<\/(?:div|span)>/i) || [])[1]) || '';
     const date = ((block.match(/<span[^>]*class="[^"]*LEwnzc[^"]*"[^>]*>([\s\S]*?)<\/span>/i) || [])[1]) || '';
     const slHtml = ((block.match(/<div class="HiHjCd">([\s\S]*?)<\/div>/i) || [])[1]) || '';
-    push(a[2], a[1], sn, cite, date, slHtml);
+    const tag = a[1];
+    push(a[3], a[2], sn, cite, date, slHtml, [
+      attrOf(tag, 'ping'),
+      attrOf(tag, 'data-href'),
+      attrOf(tag, 'data-url'),
+      attrOf(tag, 'data-lpage'),
+    ]);
   }
   if (!usedBlock) {
     const re =
-      /<h3[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>|<a[^>]+href="([^"]+)"[^>]*>[\s\S]*?<h3[^>]*>([\s\S]*?)<\/h3>/gi;
+      /<h3[^>]*>[\s\S]*?<(a\b[^>]*href="([^"]+)"[^>]*)>([\s\S]*?)<\/a>|<(a\b[^>]*href="([^"]+)"[^>]*)>[\s\S]*?<h3[^>]*>([\s\S]*?)<\/h3>/gi;
     let m;
     while ((m = re.exec(raw))) {
-      const href = m[1] || m[3] || '';
-      const title = m[2] || m[4] || '';
+      const tag = m[1] || m[4] || '';
+      const href = m[2] || m[5] || '';
+      const title = m[3] || m[6] || '';
       const after = raw.slice(m.index, m.index + 2200);
       const cite = ((after.match(/<cite[^>]*>([\s\S]*?)<\/cite>/i) || [])[1]) || '';
       const sn = ((after.match(/<(?:div|span)[^>]*class="[^"]*(?:VwiC3b|aCOpRe|MUxGbd|IsZvec)[^"]*"[^>]*>([\s\S]*?)<\/(?:div|span)>/i) || [])[1]) || '';
       const date = ((after.match(/<span[^>]*class="[^"]*LEwnzc[^"]*"[^>]*>([\s\S]*?)<\/span>/i) || [])[1]) || '';
       const slHtml = ((after.match(/<div class="HiHjCd">([\s\S]*?)<\/div>/i) || [])[1]) || '';
-      push(title, href, sn, cite, date, slHtml);
+      push(title, href, sn, cite, date, slHtml, [
+        attrOf(tag, 'ping'),
+        attrOf(tag, 'data-href'),
+        attrOf(tag, 'data-url'),
+        attrOf(tag, 'data-lpage'),
+      ]);
     }
   }
   if (results.length === 0) {
@@ -376,7 +434,8 @@ function pagePack() {
       const direct = decodeHref(t) || clean(t);
       if (direct) return direct;
     }
-    const parts = t.split(/\s*[›>]\s*/).map((s) => s.trim()).filter((s) => s && s !== '...');
+    const truncated = /\.{3}|…/.test(t);
+    const parts = t.split(/\s*[›>]\s*/).map((s) => s.trim()).filter((s) => s && s !== '...' && s !== '…');
     if (!parts[0]) return '';
     if (/^https?:\/\//i.test(parts[0]) && parts.length === 1) {
       const direct = decodeHref(parts[0]) || clean(parts[0]);
@@ -384,13 +443,38 @@ function pagePack() {
     }
     const host = parts[0].replace(/^https?:\/\//i, '').split('/')[0];
     if (!hostLooksReal(host)) return '';
-    const path = parts.slice(1).map((p) => p.replace(/^\/+/, '')).filter(Boolean);
+    const path = truncated ? [] : parts.slice(1).map((p) => p.replace(/^\/+/, '')).filter(Boolean);
     try {
       const u = new URL(`https://${host}`);
       return clean(`${u.origin}${path.length ? `/${path.join('/')}` : '/'}`);
     } catch {
       return '';
     }
+  }
+
+  function expandIndexOf(url, title) {
+    const m = String(title || '').match(/^index\s+of\s+(\/[\w.~+/-]*)/i);
+    if (!url || !m) return url;
+    try {
+      const u = new URL(url);
+      u.pathname = m[1].replace(/\/{2,}/g, '/').replace(/\/+$/, '') || '/';
+      u.search = '';
+      u.hash = '';
+      return clean(u.toString()) || url;
+    } catch {
+      return url;
+    }
+  }
+
+  function pickUrl(cands) {
+    let best = '';
+    for (const raw of cands || []) {
+      String(raw || '').split(/\s+/).forEach((part) => {
+        const url = decodeHref(part);
+        if (url && url.length > best.length) best = url;
+      });
+    }
+    return best;
   }
 
   function snippetOf(container) {
@@ -436,11 +520,16 @@ function pagePack() {
     const wrap = h.closest('div.g, div.MjjYud, div[data-sokoban-container]') || h.closest('div.yuRUbf') || h.parentElement;
     const citeEl = wrap && wrap.querySelector('cite');
     if (!citeEl) continue;
-    const a = h.closest('a[href]') || (wrap && wrap.querySelector('a[href]'));
+    const a = h.closest('a[href]') || (wrap && wrap.querySelector('div.yuRUbf a[href], a[jsname][href], a[href]'));
     const href = a ? a.getAttribute('href') || '' : '';
+    const ping = a ? a.getAttribute('ping') || '' : '';
+    const dataHref = a
+      ? a.getAttribute('data-href') || a.getAttribute('data-url') || a.getAttribute('data-lpage') || ''
+      : '';
     const displayedLink = (citeEl.textContent || '').replace(/\s+/g, ' ').trim();
-    let url = decodeHref(href);
+    let url = pickUrl([href, ping, dataHref]);
     if (!url && displayedLink) url = citeToUrl(displayedLink);
+    url = expandIndexOf(url, title) || url;
     if (!url || seen.has(url)) continue;
     seen.add(url);
     const card = h.closest('div.g, div.MjjYud') || wrap;
