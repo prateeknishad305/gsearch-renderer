@@ -518,15 +518,16 @@ function pagePack() {
     if (NAV.has(title.toLowerCase()) || AI_PREFIX.test(title)) continue;
     if (h.closest('.HiHjCd, .St0YAf, div.O1MEtf, .related-question-pair, nav, header')) continue;
     const wrap = h.closest('div.g, div.MjjYud, div[data-sokoban-container]') || h.closest('div.yuRUbf') || h.parentElement;
-    const citeEl = wrap && wrap.querySelector('cite');
-    if (!citeEl) continue;
-    const a = h.closest('a[href]') || (wrap && wrap.querySelector('div.yuRUbf a[href], a[jsname][href], a[href]'));
+    const citeEl = wrap && wrap.querySelector('cite, span.qLRx3b, cite.tjvcx, span.ylcaW');
+    const a =
+      h.closest('a[href]') ||
+      (wrap && wrap.querySelector('div.yuRUbf > a[href], a[jsname="UWckNb"], a[jsname][href], a[data-ved][href]'));
     const href = a ? a.getAttribute('href') || '' : '';
     const ping = a ? a.getAttribute('ping') || '' : '';
     const dataHref = a
       ? a.getAttribute('data-href') || a.getAttribute('data-url') || a.getAttribute('data-lpage') || ''
       : '';
-    const displayedLink = (citeEl.textContent || '').replace(/\s+/g, ' ').trim();
+    const displayedLink = citeEl ? (citeEl.textContent || '').replace(/\s+/g, ' ').trim() : '';
     let url = pickUrl([href, ping, dataHref]);
     if (!url && displayedLink) url = citeToUrl(displayedLink);
     url = expandIndexOf(url, title) || url;

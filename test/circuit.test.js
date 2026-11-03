@@ -150,6 +150,14 @@ test('google extract unwraps absolute /url?url= and keeps full path', () => {
   assert.equal(out[0].url, 'https://shop.example.com/cart/checkout');
 });
 
+test('google extract keeps h3 href when cite is missing', () => {
+  const { extractFromHtml } = require('../api/lib/googleExtract');
+  const html = '<a href="/url?q=https://shop.example.com/cart/checkout"><h3>Checkout</h3></a>';
+  const out = extractFromHtml(html);
+  assert.equal(out.length, 1);
+  assert.equal(out[0].url, 'https://shop.example.com/cart/checkout');
+});
+
 test('google extract recovers Index of path from title when cite is truncated', () => {
   const { extractFromHtml } = require('../api/lib/googleExtract');
   const html =

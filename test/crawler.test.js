@@ -41,6 +41,16 @@ test('normalizeUrl keeps http(s), drops hash, rejects others', () => {
   assert.equal(normalizeUrl('not a url'), null);
 });
 
+test('unwrapHref recovers destination from Google /url wrappers', () => {
+  const { unwrapHref } = require('../api/lib/crawler');
+  assert.equal(
+    unwrapHref('https://www.google.com/url?url=https://shop.example.com/cart/checkout&sa=t'),
+    'https://shop.example.com/cart/checkout'
+  );
+  assert.equal(unwrapHref('/url?q=https://example.com/a'), 'https://example.com/a');
+  assert.equal(unwrapHref('https://example.com/ok'), 'https://example.com/ok');
+});
+
 test('sameOrigin compares protocol and hostname only', () => {
   assert.equal(sameOrigin('https://example.com/a', 'https://example.com/b'), true);
   assert.equal(sameOrigin('https://example.com/a', 'http://example.com/a'), false);

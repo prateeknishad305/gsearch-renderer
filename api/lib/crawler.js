@@ -1,7 +1,8 @@
 'use strict';
 
-const { withBrowser, newContext } = require('./browserPool');
+const { withPage } = require('./browserPool');
 const { getShardPool, intEnv } = require('./proxyPool');
+const { unwrapGoogleHref } = require('./googleExtract');
 
 const MAX_PAGES = 20;
 const MAX_DEPTH = 3;
@@ -47,8 +48,13 @@ function sameOrigin(a, b) {
   }
 }
 
+function unwrapHref(raw, base) {
+  const unwrapped = unwrapGoogleHref(raw) || String(raw || '').trim();
+  return normalizeUrl(unwrapped, base);
+}
+
 function isAllowedUrl(raw, origin, sameOriginOnly) {
-  const url = normalizeUrl(raw);
+  const url = unwrapHref(raw) || normalizeUrl(raw);
   if (!url) return null;
   let host;
   try {
@@ -94,18 +100,26 @@ async function renderPage(page, url) {
       const text = (document.body ? document.body.innerText : '').replace(/\s+/g, ' ').trim().slice(0, 2000);
       const links = [];
       const seen = new Set();
-      document.querySelectorAll('a[href]').forEach((a) => {
-        const href = a.getAttribute('href') || '';
-        if (!href || href.startsWith('#') || /^(javascript|mailto|tel):/i.test(href)) return;
-        let abs = href;
-        try {
-          abs = new URL(href, location.href).toString();
-        } catch {
-          return;
+      document.querySelectorAll('a[href], a[ping], a[data-href], a[data-url]').forEach((a) => {
+        const hrefs = [
+          a.getAttribute('href') || '',
+          a.getAttribute('ping') || '',
+          a.getAttribute('data-href') || '',
+          a.getAttribute('data-url') || '',
+          a.getAttribute('data-lpage') || '',
+        ];
+        for (const href of hrefs) {
+          if (!href || href.startsWith('#') || /^(javascript|mailto|tel):/i.test(href)) continue;
+          let abs = href;
+          try {
+            abs = new URL(href, location.href).toString();
+          } catch {
+            continue;
+          }
+          if (seen.has(abs)) continue;
+          seen.add(abs);
+          links.push({ url: abs, text: (a.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 160) });
         }
-        if (seen.has(abs)) return;
-        seen.add(abs);
-        links.push({ url: abs, text: (a.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 160) });
       });
       return { title, description, text, links, href: location.href };
     })
@@ -148,45 +162,32 @@ async function crawl(opts) {
   const queue = [{ url: start, depth: 0 }];
   const pages = [];
 
-  await withBrowser({ proxy: chosenProxy }, async (browser) => {
-    const context = await newContext(browser, { proxy: chosenProxy });
-    try {
-      while (queue.length && pages.length < pagesCap) {
-        if (Date.now() > deadline) break;
-        const item = queue.shift();
-        const page = await context.newPage();
-        page.setDefaultTimeout(NAV_TIMEOUT_MS);
-        page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
-        let rendered;
-        try {
-          rendered = await renderPage(page, item.url);
-        } finally {
-          await page.close().catch(() => {});
+  await withPage({ proxy: chosenProxy, navMs: NAV_TIMEOUT_MS }, async (page) => {
+    while (queue.length && pages.length < pagesCap) {
+      if (Date.now() > deadline) break;
+      const item = queue.shift();
+      const rendered = await renderPage(page, item.url);
+      const allowedLinks = [];
+      for (const link of rendered.links) {
+        const allowed = isAllowedUrl(link.url, start, sameOriginOnly);
+        if (!allowed) continue;
+        allowedLinks.push({ url: allowed, text: link.text || '' });
+        if (item.depth < depthCap && pages.length + queue.length < pagesCap && !seen.has(allowed)) {
+          seen.add(allowed);
+          queue.push({ url: allowed, depth: item.depth + 1 });
         }
-        const allowedLinks = [];
-        for (const link of rendered.links) {
-          const allowed = isAllowedUrl(link.url, start, sameOriginOnly);
-          if (!allowed) continue;
-          allowedLinks.push({ url: allowed, text: link.text || '' });
-          if (item.depth < depthCap && pages.length + queue.length < pagesCap && !seen.has(allowed)) {
-            seen.add(allowed);
-            queue.push({ url: allowed, depth: item.depth + 1 });
-          }
-        }
-        pages.push({
-          url: rendered.url,
-          final_url: rendered.final_url,
-          depth: item.depth,
-          status: rendered.status,
-          title: rendered.title,
-          description: rendered.description,
-          text: rendered.text,
-          links: allowedLinks.slice(0, 100),
-          error: rendered.error,
-        });
       }
-    } finally {
-      await context.close().catch(() => {});
+      pages.push({
+        url: rendered.url,
+        final_url: rendered.final_url,
+        depth: item.depth,
+        status: rendered.status,
+        title: rendered.title,
+        description: rendered.description,
+        text: rendered.text,
+        links: allowedLinks.slice(0, 100),
+        error: rendered.error,
+      });
     }
   });
 
@@ -202,6 +203,7 @@ async function crawl(opts) {
 module.exports = {
   crawl,
   normalizeUrl,
+  unwrapHref,
   isAllowedUrl,
   isPrivateHostname,
   sameOrigin,
