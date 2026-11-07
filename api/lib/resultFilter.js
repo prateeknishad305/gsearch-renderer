@@ -70,21 +70,21 @@ const SOCIAL_HOST =
 // Developer/docs/tutorial hosts. OFF by default; enable with FILTER_DEV=1,
 // ?dev=1 or ?unique=1.
 const DEV_HOST =
-  /(?:^|\.)(?:github\.com|gitlab\.com|bitbucket\.org|stackoverflow\.com|stackexchange\.com|superuser\.com|serverfault\.com|npmjs\.com|pypi\.org|packagist\.org|rubygems\.org|crates\.io|nuget\.org|dev\.to|hashnode\.com|mdn\.mozilla\.org|w3schools\.com|geeksforgeeks\.org|tutorialspoint\.com|javatpoint\.com|baeldung\.com|freecodecamp\.org|codecademy\.com|leetcode\.com|hackerrank\.com|sourceforge\.net|readthedocs\.io|gitbook\.io|devdocs\.io|docs\.rs|pkg\.go\.dev|godoc\.org|rubydoc\.info|cppreference\.com|learn\.microsoft\.com|pastebin\.com|gist\.github\.com|codesandbox\.io|jsfiddle\.net|codepen\.io)$/i;
+  /(?:^|\.)(?:github\.com|github\.io|githubusercontent\.com|gitlab\.com|gitlab\.io|bitbucket\.org|bitbucket\.io|stackoverflow\.com|stackexchange\.com|superuser\.com|serverfault\.com|npmjs\.com|pypi\.org|packagist\.org|rubygems\.org|crates\.io|nuget\.org|dev\.to|hashnode\.com|mdn\.mozilla\.org|w3schools\.com|geeksforgeeks\.org|tutorialspoint\.com|javatpoint\.com|baeldung\.com|freecodecamp\.org|codecademy\.com|leetcode\.com|hackerrank\.com|sourceforge\.net|readthedocs\.io|gitbook\.io|devdocs\.io|docs\.rs|pkg\.go\.dev|godoc\.org|rubydoc\.info|cppreference\.com|learn\.microsoft\.com|pastebin\.com|gist\.github\.com|codesandbox\.io|jsfiddle\.net|codepen\.io)$/i;
 
-// Document mills / reference dumps. OFF by default; ?ugc=1 or ?unique=1.
 const UGC_HOST =
-  /(?:^|\.)(?:scribd\.com|slideshare\.net|issuu\.com|academia\.edu|researchgate\.net|fandom\.com|wikipedia\.org|wikihow\.com|about\.me|linktr\.ee|hubpages\.com|vocal\.media|answers\.com|ask\.com|ehow\.com|genius\.com)$/i;
+  /(?:^|\.)(?:scribd\.com|slideshare\.net|issuu\.com|academia\.edu|researchgate\.net|fandom\.com|wikipedia\.org|wikihow\.com|about\.me|linktr\.ee|hubpages\.com|vocal\.media|answers\.com|ask\.com|ehow\.com|genius\.com|pdfcoffee\.com|studocu\.com|coursehero\.com|chegg\.com|brainly\.com|quizlet\.com|docsity\.com|goodreads\.com|wattpad\.com|archiveofourown\.org|fanfiction\.net)$/i;
 
-// Known blog platforms. OFF by default; ?blog=1 or ?unique=1.
 const BLOG_HOST =
-  /(?:^|\.)(?:blogspot\.com|blogger\.com|wordpress\.com|substack\.com|ghost\.io|tumblr\.com|livejournal\.com|typepad\.com|weebly\.com|wixsite\.com|medium\.com)$/i;
+  /(?:^|\.)(?:blogspot\.com|blogger\.com|wordpress\.com|substack\.com|ghost\.io|tumblr\.com|livejournal\.com|typepad\.com|weebly\.com|wixsite\.com|medium\.com|hatenablog\.com|over-blog\.com|jimdo\.com)$/i;
+const BLOG_HOST_PREFIX = /^(?:blog|blogs|weblog)(?:\.|$)/i;
+const BLOG_PATH = /(?:^|\/)(?:blog|blogs|weblog)(?:\/|$)/i;
 
-// Forum software / communities. OFF by default; ?forum=1 or ?unique=1.
 const FORUM_HOST =
   /(?:^|\.)(?:discourse\.org|phpbb\.com|vbulletin\.com|xenforo\.com|groups\.google\.com|4chan\.org|4channel\.org|lemmy\.world|kbin\.social|discourse\.group)$/i;
+const FORUM_HOST_PREFIX = /^(?:forum|forums|board|boards|community|talk|discuss)(?:\.|$)/i;
 const FORUM_PATH =
-  /(?:showthread|viewtopic|viewforum|showpost)\.php|(?:^|\/)(?:forums?|boards?|community\/(?:threads?|posts?)|threads?|topic\/|t-\d)/i;
+  /(?:showthread|viewtopic|viewforum|showpost|viewthread)\.php|(?:^|\/)(?:forums?|boards?|community|discuss(?:ion)?s?|threads?|topic\/|t-\d|t\/\d)(?:\/|$|\?)|\/index\.php\?(?:topic|board)=/i;
 
 function dropSocial() {
   return envOn('FILTER_SOCIAL', true);
@@ -114,6 +114,14 @@ function hostOf(url) {
   }
 }
 
+function labelsOf(host) {
+  return String(host || '')
+    .toLowerCase()
+    .replace(/^www\./, '')
+    .split('.')
+    .filter(Boolean);
+}
+
 function isSocialHost(host) {
   return SOCIAL_HOST.test(String(host || ''));
 }
@@ -127,11 +135,18 @@ function isUgcHost(host) {
 }
 
 function isBlogHost(host) {
-  return BLOG_HOST.test(String(host || ''));
+  const h = String(host || '').toLowerCase();
+  if (BLOG_HOST.test(h)) return true;
+  if (/(?:^|\.)blogspot\./i.test(h)) return true;
+  const labels = labelsOf(h);
+  return labels.some((lab) => BLOG_HOST_PREFIX.test(`${lab}.`));
 }
 
 function isForumHost(host) {
-  return FORUM_HOST.test(String(host || ''));
+  const h = String(host || '').toLowerCase();
+  if (FORUM_HOST.test(h)) return true;
+  const labels = labelsOf(h);
+  return labels.some((lab) => FORUM_HOST_PREFIX.test(`${lab}.`));
 }
 
 function isForumUrl(url) {
@@ -145,7 +160,13 @@ function isForumUrl(url) {
 }
 
 function isBlogUrl(url) {
-  return isBlogHost(hostOf(url));
+  try {
+    const u = new URL(String(url || ''));
+    if (isBlogHost(u.hostname)) return true;
+    return BLOG_PATH.test(u.pathname);
+  } catch {
+    return isBlogHost(hostOf(url));
+  }
 }
 
 function parseResultFilters(query = {}) {

@@ -92,16 +92,30 @@ test('host predicates handle subdomains', () => {
   assert.equal(isSocialHost('m.facebook.com'), true);
   assert.equal(isSocialHost('facebook.com.evil.test'), false);
   assert.equal(isDevHost('gist.github.com'), true);
-  assert.equal(isDevHost('github.io'), false);
+  assert.equal(isDevHost('github.io'), true);
+  assert.equal(isDevHost('user.github.io'), true);
 });
 
 test('unique also drops scribd, forums and blog platforms', () => {
-  const { isUgcHost, isForumUrl, isBlogUrl } = require('../api/lib/resultFilter');
+  const { isUgcHost, isForumUrl, isBlogUrl, isDevHost, isBlogHost, isForumHost } = require('../api/lib/resultFilter');
   assert.equal(isUgcHost('www.scribd.com'), true);
   assert.equal(isForumUrl('https://shop.example.com/forum/thread/1'), true);
   assert.equal(isForumUrl('https://shop.example.com/checkout'), false);
+  assert.equal(isForumUrl('https://forum.shop.example.com/t/1'), true);
+  assert.equal(isForumHost('community.shop.example.com'), true);
   assert.equal(isBlogUrl('https://myblog.wordpress.com/post'), true);
+  assert.equal(isBlogUrl('https://user.blogspot.de/2024/01/x'), true);
+  assert.equal(isBlogUrl('https://shop.example.com/blog/hello'), true);
+  assert.equal(isBlogHost('blog.shop.example.com'), true);
+  assert.equal(isDevHost('octocat.github.io'), true);
+  const extra = list.concat(
+    r('https://octocat.github.io/pages'),
+    r('https://forum.shop.example.com/t/1'),
+    r('https://blog.shop.example.com/hello'),
+    r('https://name.blogspot.co.uk/p/1'),
+    r('https://shop.example.com/blog/post')
+  );
   const opts = parseResultFilters({ unique: '1' });
-  const out = applyDomainFilters(list, opts);
+  const out = applyDomainFilters(extra, opts);
   assert.deepEqual(out.map((x) => x.url), ['https://example.com/a']);
 });

@@ -638,7 +638,7 @@ async function handleSearch(req, res) {
 
   const cache = getCache();
   const cacheKey = JSON.stringify([
-    'v10',
+    'v11',
     engineList.join(','),
     mode,
     q,

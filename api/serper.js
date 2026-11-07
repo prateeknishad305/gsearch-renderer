@@ -97,7 +97,7 @@ module.exports = async (req, res) => {
     if (!r || !r.results || !r.results.length) return null;
     const hostSites = dorkInfo.site_targets.filter(isHostSiteTarget);
     let results = applyDomainFilters(r.results, {
-      ...(dorkMode ? { social: true, dev: true } : {}),
+      ...(dorkMode ? { social: true, dev: true, ugc: true, forum: true, blog: true } : {}),
       ...(hostSites.length ? { allowDomains: hostSites } : {}),
     });
     if (dorkMode) {
