@@ -1,6 +1,7 @@
 'use strict';
 
-const { launchBrowser, parseProxy, stealthMarkup, resolveUA, DESKTOP_UA } = require('./browser');
+const { launchBrowser, parseProxy, resolveUA, DESKTOP_UA } = require('./browser');
+const uaMask = require('./uaMask');
 
 function intEnv(name, dflt) {
   const v = parseInt(process.env[name], 10);
@@ -125,32 +126,44 @@ async function getBrowser({ disableHttp2 = false, browser: browserName } = {}) {
 
 async function newContext(browser, { proxy, hl, gl, google, browser: browserName, javascript } = {}) {
   const flavorId = require('./browserFlavor').normalizeFlavor(browserName);
-  const ua = await resolveUA(browser, DESKTOP_UA, flavorId);
+  const ua = uaMask.sanitizeUa(await resolveUA(browser, DESKTOP_UA, flavorId));
   const g = google ? require('./google') : null;
-  const geoOpts = g ? g.contextOptions({ proxy, hl, gl, chromeMajor: (ua.match(/Chrome\/(\d+)/) || [])[1] }) : null;
+  const geoOpts = g ? g.contextOptions({ proxy, hl, gl, chromeMajor: uaMask.chromeMajor(ua) }) : null;
+  const langs = g ? g.languageList(geoOpts && geoOpts.geo) : ['en-US', 'en'];
+  const profile = uaMask.profileFrom({ ua, flavorId, langs });
   const opts = {
     locale: (geoOpts && geoOpts.locale) || 'en-US',
     timezoneId: (geoOpts && geoOpts.timezoneId) || 'America/New_York',
-    userAgent: ua,
+    userAgent: profile.ua,
     viewport: (geoOpts && geoOpts.viewport) || { width: 1366, height: 768 },
     colorScheme: 'light',
-    hasTouch: false,
+    hasTouch: !!profile.mobile,
     javaScriptEnabled: javascript !== false,
   };
+  if (geoOpts && geoOpts.geolocation) {
+    opts.geolocation = geoOpts.geolocation;
+    opts.permissions = ['geolocation'];
+  }
   const headers = geoOpts && geoOpts.extraHTTPHeaders ? { ...geoOpts.extraHTTPHeaders } : {};
-  const ch = require('./browserFlavor').chUa(flavorId, (ua.match(/Chrome\/(\d+)/) || [])[1] || 125);
-  if (ch) {
-    headers['sec-ch-ua'] = ch;
+  const ch = uaMask.chHeaders(profile);
+  if (Object.keys(ch).length) {
+    Object.assign(headers, ch);
+    headers['User-Agent'] = profile.ua;
   } else {
     delete headers['sec-ch-ua'];
     delete headers['sec-ch-ua-mobile'];
     delete headers['sec-ch-ua-platform'];
+    delete headers['sec-ch-ua-platform-version'];
+    delete headers['sec-ch-ua-arch'];
+    delete headers['sec-ch-ua-bitness'];
+    delete headers['sec-ch-ua-model'];
+    delete headers['sec-ch-ua-full-version'];
+    delete headers['sec-ch-ua-full-version-list'];
   }
   if (Object.keys(headers).length) opts.extraHTTPHeaders = headers;
   if (proxy) opts.proxy = parseProxy(proxy);
   const context = await browser.newContext(opts);
-  if (g) await context.addInitScript(g.googleInitScript, { langs: g.languageList(geoOpts && geoOpts.geo) });
-  else await context.addInitScript(stealthMarkup);
+  await context.addInitScript(uaMask.apply, profile);
   return context;
 }
 

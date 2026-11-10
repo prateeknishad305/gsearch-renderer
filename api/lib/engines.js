@@ -948,6 +948,9 @@ function detectBlock(engine) {
   // 1) URL-level hard signals.
   if (url.includes('/sorry/')) return `${store} is showing its "unusual traffic" interstitial for this IP.`;
   if (/showcaptcha/i.test(url)) return `${store} redirected to a SmartCaptcha challenge.`;
+  if (/turnstile|cf-chl|challenges\.cloudflare/i.test(url) || /cf-turnstile|cf-chl-/i.test(low)) {
+    return `${store} served a Cloudflare Turnstile challenge.`;
+  }
   if (engine === 'shodan' && (/\/login/i.test(url) || low.includes('please log in') || low.includes('log in to search') || low.includes('create a free account'))) {
     return `${store} requires a logged-in session for search (public HTML, no API key).`;
   }
@@ -980,6 +983,9 @@ function detectBlock(engine) {
      'waiting for verification',
      'verifying your request',
      'something went wrong during verification',
+     'turnstile',
+     'just a moment',
+     'attention required',
    ];
   for (const phrase of STRONG) {
     if (low.includes(phrase)) return `${store} served an anti-bot block ("${phrase}").`;

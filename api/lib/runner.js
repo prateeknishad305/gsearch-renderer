@@ -8,6 +8,9 @@ const g = require('./google');
 const session = require('./googleSession');
 const ip = require('./googleIp');
 const lock = require('./googleLock');
+const challenge = require('./challenge');
+const heal = require('./healSelectors');
+const llmParse = require('./llmParse');
 
 function intEnv(name, dflt) {
   const v = parseInt(process.env[name], 10);
@@ -96,10 +99,11 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug, pr
   }
 
   if (google && g.isSorryUrl(page.url())) {
-    const e = new Error(`Engine "google" blocked the browser render: unusual traffic interstitial`);
-    e.code = 'BLOCKED';
-    throw e;
+    throw challenge.blockedError({ type: 'sorry' }, engine);
   }
+  const htmlHint = await page.content().catch(() => '');
+  const hit = challenge.detectChallenge({ url: page.url(), html: htmlHint, title: await page.title().catch(() => '') });
+  if (hit) throw challenge.blockedError(hit, engine);
 
   if (!navError) {
     await page
@@ -190,6 +194,15 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug, pr
           })())
           .catch(() => []);
         if (Array.isArray(harvested) && harvested.length) clean = harvested;
+      }
+      if (heal.needsHeal(clean)) {
+        const htmlNow = await page.content().catch(() => htmlHint);
+        const healed = heal.harvest(htmlNow, num);
+        if (healed.length) clean = healed;
+        else if (llmParse.enabled()) {
+          const ai = await llmParse.extract(htmlNow);
+          if (ai && ai.length) clean = ai;
+        }
       }
       if (clean.length > 0 || pass === (cfg.scroll || 0)) break;
       await page.evaluate(() => window.scrollBy(0, window.innerHeight * 2));

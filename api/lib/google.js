@@ -230,10 +230,12 @@ function extraHeaders(geo, chromeMajor) {
     Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
     'Upgrade-Insecure-Requests': '1',
   };
-  if (envFlag('GOOGLE_CH_UA', false)) {
-    out['sec-ch-ua'] = `"Chromium";v="${major}", "Not.A/Brand";v="24", "Google Chrome";v="${major}"`;
-    out['sec-ch-ua-mobile'] = '?0';
-    out['sec-ch-ua-platform'] = '"Windows"';
+  if (envFlag('GOOGLE_CH_UA', true)) {
+    const uaMask = require('./uaMask');
+    const flavor = require('./browserFlavor');
+    const ua = uaMask.sanitizeUa(flavor.uaFor('chromium', major));
+    Object.assign(out, uaMask.chHeaders(uaMask.profileFrom({ ua, flavorId: 'chromium' })));
+    out['User-Agent'] = ua;
   }
   return out;
 }
@@ -244,13 +246,17 @@ function viewport() {
 
 function contextOptions({ proxy, hl, gl, chromeMajor } = {}) {
   const geo = resolveGeo({ gl, hl, proxy });
+  const coords = envFlag('GOOGLE_GEO_COORDS', true)
+    ? require('./geoInject').coordsFor({ gl: geo.gl, proxy })
+    : undefined;
   return {
     locale: geo.locale.replace('_', '-'),
     timezoneId: geo.tz,
     viewport: viewport(),
     colorScheme: 'light',
     extraHTTPHeaders: extraHeaders(geo, chromeMajor),
-    geolocation: undefined,
+    geolocation: coords,
+    permissions: coords ? ['geolocation'] : undefined,
     hasTouch: false,
     isMobile: false,
     javaScriptEnabled: true,
@@ -287,8 +293,10 @@ function assetBlockDefault() {
   return !!(process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME || process.env.AWS_EXECUTION_ENV);
 }
 
-function shouldBlockRequest(url, resourceType) {
+function shouldBlockRequest(url, resourceType, headers) {
   if (!envFlag('GOOGLE_BLOCK_ASSETS', assetBlockDefault())) return false;
+  const media = require('./mediaBlock').shouldAbort({ url, resourceType, headers });
+  if (media) return true;
   const type = String(resourceType || '');
   if (BLOCK_TYPE.has(type)) return true;
   try {
@@ -423,7 +431,7 @@ function probeProxy(proxy, timeoutMs) {
 }
 
 function isSorryUrl(url) {
-  return /\/sorry\b|\/recaptcha\b|unusual.?traffic/i.test(String(url || ''));
+  return /\/sorry\b|\/recaptcha\b|unusual.?traffic|turnstile|challenges\.cloudflare|cf-chl-|hcaptcha|showcaptcha/i.test(String(url || ''));
 }
 
 function isSoftBlock({ navStatus, h3, textLen, url }) {
@@ -476,17 +484,28 @@ function languageList(geo) {
 
 function googleInitScript(arg) {
   const langs = (arg && arg.langs && arg.langs.length) ? arg.langs : ['en-US', 'en'];
+  const ua = String(
+    (arg && arg.ua) ||
+      (typeof navigator !== 'undefined' && navigator.userAgent) ||
+      ''
+  ).replace(/HeadlessChrome/gi, 'Chrome');
   try {
-    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined, configurable: true });
   } catch {}
   try {
-    Object.defineProperty(navigator, 'languages', { get: () => langs });
+    if (ua) {
+      Object.defineProperty(navigator, 'userAgent', { get: () => ua, configurable: true });
+      Object.defineProperty(navigator, 'appVersion', { get: () => ua.replace(/^Mozilla\//, ''), configurable: true });
+    }
+    Object.defineProperty(navigator, 'platform', { get: () => 'Win32', configurable: true });
+    Object.defineProperty(navigator, 'vendor', { get: () => 'Google Inc.', configurable: true });
+    Object.defineProperty(navigator, 'languages', { get: () => langs, configurable: true });
+    Object.defineProperty(navigator, 'language', { get: () => langs[0] || 'en-US', configurable: true });
   } catch {}
   try {
-    Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
-    Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
-    Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
-    Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+    Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8, configurable: true });
+    Object.defineProperty(navigator, 'deviceMemory', { get: () => 8, configurable: true });
+    Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0, configurable: true });
   } catch {}
   try {
     window.chrome = window.chrome || { runtime: {}, app: { isInstalled: false } };
@@ -532,8 +551,9 @@ const FIXES = [
   'upgrade_insecure', 'accept_html', 'viewport_1366x768', 'light_scheme', 'no_touch',
   'js_on', 'webrtc_proxy_only', 'translate_off', 'no_sync', 'no_bg_net',
   'no_component_update', 'no_default_apps', 'no_hang_monitor', 'metrics_only',
-  'no_phishing', 'no_safebrowse_update', 'hw_concurrency', 'device_memory',
+  'no_phishing', 'no_safebrowse_update',   'hw_concurrency', 'device_memory',
   'max_touch_0', 'platform_win32', 'chrome_runtime', 'webdriver_undef',
+  'ua_page_mask', 'ua_client_hints_full', 'ua_worker_mask', 'ua_headless_strip',
   'languages_geo', 'referer_page2', 'cache_ok', 'nav_12s', 'post_delay_80',
   'sticky_cookies_skip', 'country_plus_param', 'cc_param', 'filter_youtube_host',
   'filter_gstatic', 'filter_adsvc', '429_block', '403_block', 'empty_h3_soft',

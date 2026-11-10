@@ -604,6 +604,31 @@ function pagePack() {
   });
   if (related.length) extras.relatedSearches = related.slice(0, 12);
 
+  const maps = [];
+  document.querySelectorAll('[data-local-attribute], .VkpGBb, .rllt__link, a[href*="/maps/place"]').forEach((el) => {
+    const title = ((el.querySelector('.dbg0pd, .OSrXXb, .qBF1Pd') && el.querySelector('.dbg0pd, .OSrXXb, .qBF1Pd').textContent) || el.getAttribute('aria-label') || el.textContent || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const href = el.getAttribute('href') || (el.querySelector('a[href]') && el.querySelector('a[href]').getAttribute('href')) || '';
+    if (!title || title.length < 2 || title.length > 120) return;
+    maps.push({ title, url: href || '' });
+  });
+  if (maps.length) extras.maps = maps.slice(0, 8);
+
+  const shopping = [];
+  document.querySelectorAll('.sh-dgr__content, .pla-unit, [data-dtld], a[href*="shopping/product"]').forEach((el) => {
+    const title = ((el.querySelector('h3, .tAxDx, .pymv4e') && el.querySelector('h3, .tAxDx, .pymv4e').textContent) || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const price = ((el.querySelector('.a8Pemb, .T4OwTb, .e10twf') && el.querySelector('.a8Pemb, .T4OwTb, .e10twf').textContent) || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const href = el.getAttribute('href') || (el.querySelector('a[href]') && el.querySelector('a[href]').getAttribute('href')) || '';
+    if (!title || title.length < 2) return;
+    shopping.push({ title, price, url: href || '' });
+  });
+  if (shopping.length) extras.shopping = shopping.slice(0, 8);
+
   return { results, extras: Object.keys(extras).length ? extras : null };
 }
 

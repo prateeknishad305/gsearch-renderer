@@ -17,6 +17,10 @@ function send(res, body, status = 200) {
     res.setHeader('ETag', etag);
     res.setHeader('Cache-Control', 'private, max-age=60');
   }
+  if (res && res.req && require('./streamJson').wantsStream(res.req) && body && Array.isArray(body.results)) {
+    res.statusCode = code;
+    return require('./streamJson').writeNdjson(res, body);
+  }
   return res.status(code).json(body);
 }
 
@@ -24,17 +28,16 @@ function send(res, body, status = 200) {
 // "Authorization: Bearer <token>" or "?token=<token>". Hosted instances should
 // set this so the renderer is not an open proxy for arbitrary callers.
 function authOk(req) {
-  const token = String(process.env.API_TOKEN || '').trim();
-  if (!token) return true;
-  const header = String(req.headers['authorization'] || '');
-  const query = String((req.query && req.query.token) || '');
-  const apiKey = String(req.headers['x-api-key'] || '');
-  return header === `Bearer ${token}` || query === token || apiKey === token;
+  const tenant = require('./tenantAuth').authorize(req);
+  req.tenant = tenant;
+  return tenant.ok;
 }
 
-function unauthorized(res) {
+function unauthorized(res, req) {
   cors(res);
-  return res.status(401).json({ success: false, code: 'UNAUTHORIZED', error: 'Missing or invalid API token', count: 0, results: [] });
+  const code = (req && req.tenant && req.tenant.code) || 'UNAUTHORIZED';
+  const status = code === 'RATE_LIMITED' ? 429 : code === 'FORBIDDEN' ? 403 : 401;
+  return res.status(status).json({ success: false, code, error: 'Missing or invalid API token', count: 0, results: [] });
 }
 
 function maskProxy(proxy) {

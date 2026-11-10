@@ -54,8 +54,10 @@ test('publicCode hides block/sorry internals', () => {
   assert.equal(publicCode('BLOCKED'), 'ENGINE_UNAVAILABLE');
   assert.equal(publicCode('SORRY'), 'ENGINE_UNAVAILABLE');
   assert.equal(publicCode('CIRCUIT_OPEN'), 'ENGINE_UNAVAILABLE');
+  assert.equal(publicCode('NO_ATTEMPT'), 'ENGINE_UNAVAILABLE');
   assert.equal(publicCode('LITE_HTTP_ERROR'), 'LITE_HTTP_ERROR');
   assert.equal(publicCode(undefined), 'ERROR');
+  assert.notEqual(publicCode('BLOCKED'), 'BLOCKED');
 });
 
 test('publicMessage never leaks block/sorry wording', () => {

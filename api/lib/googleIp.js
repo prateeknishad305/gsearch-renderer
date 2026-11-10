@@ -51,8 +51,13 @@ function record(proxy, code) {
     s.skip_until = 0;
     return;
   }
-  if (code === 'BLOCKED' || code === 'SORRY') s.blocked += 1;
-  else if (code === 'EMPTY_RESULTS' || code === 'SOFT_BLOCK') s.empty += 1;
+  if (code === 'BLOCKED' || code === 'SORRY') {
+    s.blocked += 1;
+    s.consecutive_fail += 1;
+    s.skip_until = Date.now() + openMs();
+    return;
+  }
+  if (code === 'EMPTY_RESULTS' || code === 'SOFT_BLOCK') s.empty += 1;
   else s.error += 1;
   s.consecutive_fail += 1;
   if (s.consecutive_fail >= openAfter()) s.skip_until = Date.now() + openMs();

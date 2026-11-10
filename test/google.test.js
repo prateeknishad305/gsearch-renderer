@@ -121,6 +121,7 @@ test('Vercel defaults to blocking images without GOOGLE_BLOCK_ASSETS', () => {
 test('sorry and soft-block detectors', () => {
   assert.equal(g.isSorryUrl('https://www.google.com/sorry/index?continue=x'), true);
   assert.equal(g.isSorryUrl('https://www.google.com/sorry/index?continue=x&q=unusual-traffic'), true);
+  assert.equal(g.isSorryUrl('https://challenges.cloudflare.com/cdn-cgi/challenge-platform/turnstile'), true);
   assert.equal(g.isSorryUrl('https://www.google.com/search?q=hello'), false);
   assert.equal(g.isSoftBlock({ navStatus: 200, h3: 8, textLen: 4000, url: 'https://www.google.com/search' }), false);
   assert.equal(g.isSoftBlock({ navStatus: 429, h3: 0, textLen: 10, url: 'https://www.google.com/search' }), true);
@@ -131,16 +132,29 @@ test('per-IP circuit opens and cools', () => {
   ip.reset();
   const p = 'http://u:p@exit.example:8080';
   assert.equal(ip.isOpen(p), false);
-  for (let i = 0; i < ip.openAfter(); i++) ip.record(p, 'BLOCKED');
+  ip.record(p, 'BLOCKED');
   assert.equal(ip.isOpen(p), true);
   ip.record(p, 'OK');
   assert.equal(ip.isOpen(p), false);
   ip.reset();
 });
 
+test('captcha cools that exit immediately; other errors still need a streak', () => {
+  ip.reset();
+  const blocked = 'http://u:p@captcha.example:8080';
+  const flaky = 'http://u:p@flaky.example:8080';
+  const next = 'http://u:p@next.example:8080';
+  ip.record(blocked, 'BLOCKED');
+  assert.equal(ip.shouldSkip(blocked), true);
+  assert.deepEqual(ip.pickOpen([blocked, next]), [next]);
+  ip.record(flaky, 'ERROR');
+  assert.equal(ip.shouldSkip(flaky), ip.openAfter() <= 1);
+  ip.reset();
+});
+
 test('circuit does not skip the direct exit', () => {
   ip.reset();
-  for (let i = 0; i < ip.openAfter(); i++) ip.record(null, 'BLOCKED');
+  ip.record(null, 'BLOCKED');
   assert.equal(ip.isOpen(null), true);
   assert.equal(ip.shouldSkip(null), false);
   const p = 'http://u:p@skip.example:8080';

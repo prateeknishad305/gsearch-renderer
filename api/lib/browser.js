@@ -10,6 +10,7 @@
 
 const { resolveLaunch } = require('./chromium');
 const flavor = require('./browserFlavor');
+const uaMask = require('./uaMask');
 
 let pwMod = null;
 
@@ -62,35 +63,15 @@ async function resolveUA(browser, fallback, flavorId) {
   try {
     const ver = await browser.version();
     const m = String(ver).match(/(\d+)\.[\d.]+/);
-    if (m) return flavor.uaFor('chromium', m[1]);
+    if (m) return uaMask.sanitizeUa(flavor.uaFor('chromium', m[1]));
   } catch {
     /* ignore */
   }
-  return fallback;
+  return uaMask.sanitizeUa(fallback);
 }
 
-// Hides common automation fingerprints. Runs before any page script.
 function stealthMarkup() {
-  try {
-    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-  } catch {}
-  try {
-    Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
-    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-  } catch {}
-  try {
-    window.chrome = window.chrome || {};
-    window.chrome.runtime = window.chrome.runtime || {};
-  } catch {}
-  try {
-    const q = navigator.permissions && navigator.permissions.query;
-    if (q) {
-      navigator.permissions.query = (p) =>
-        p && p.name === 'notifications'
-          ? Promise.resolve({ state: Notification.permission })
-          : q.call(navigator.permissions, p);
-    }
-  } catch {}
+  uaMask.apply(uaMask.profileFrom({ ua: DESKTOP_UA, flavorId: 'chromium' }));
 }
 
 async function newSearchContext({ proxy }) {
@@ -111,7 +92,8 @@ async function newSearchContext({ proxy }) {
   }
   try {
     const context = await browser.newContext(opts);
-    await context.addInitScript(stealthMarkup);
+    const profile = uaMask.profileFrom({ ua, flavorId: 'chromium' });
+    await context.addInitScript(uaMask.apply, profile);
     return { browser, context };
   } catch (err) {
     await browser.close().catch(() => {});
@@ -146,4 +128,5 @@ module.exports = {
   stealthMarkup,
   resolveUA,
   flavor,
+  uaMask,
 };

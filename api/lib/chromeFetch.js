@@ -2,6 +2,8 @@
 
 const { withPage } = require('./browserPool');
 const g = require('./google');
+const challenge = require('./challenge');
+const { applyRoute } = require('./mediaBlock');
 
 function intEnv(name, dflt) {
   const v = parseInt(process.env[name], 10);
@@ -86,11 +88,12 @@ function itemsToHtml(site, items) {
 
 function isBlocked(site, page, html) {
   const loc = page.url() || '';
+  if (challenge.detectChallenge({ url: loc, html, title: page._lastTitle })) return true;
   if (site === 'google') return /\/sorry\//i.test(loc);
   const low = String(html || '').toLowerCase();
   if (/^captcha$/i.test((page._lastTitle || ''))) return true;
   if (/<title>\s*captcha\s*<\/title>/i.test(html || '')) return true;
-  if (/altcha\.js|data-altcha|protected by altcha/i.test(low)) return true;
+  if (/altcha\.js|data-altcha|protected by altcha|cf-turnstile|h-captcha|g-recaptcha/i.test(low)) return true;
   if (/503 service not available/i.test(low)) return true;
   return false;
 }
@@ -98,8 +101,8 @@ function isBlocked(site, page, html) {
 async function runSearch(page, site, url, timeout) {
   await page.route('**/*', (route) => {
     const t = route.request().resourceType();
-    if (t === 'image' || t === 'media' || t === 'font') return route.abort();
-    return route.continue();
+    if (t === 'image' || t === 'font') return route.abort();
+    return applyRoute(route);
   }).catch(() => {});
   const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout });
   const ready = site === 'mojeek' ? 'ul.results-standard li a.ob, ul.results-standard li h2 a' : 'h3, cite';

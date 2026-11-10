@@ -43,6 +43,9 @@ test('health is public even when API_TOKEN is set', async () => {
   assert.equal(res.body.features.circuit, true);
   assert.equal(res.body.features.cache, true);
   assert.equal(res.body.features.browser_flavor, true);
+  assert.equal(res.body.features.captcha_block, true);
+  assert.equal(res.body.features.captcha_solver, false);
+  assert.equal(res.body.features.dashboard, true);
   assert.equal(typeof res.body.features.proxy_race, 'number');
   assert.ok(res.body.features.proxy_race >= 1);
   assert.ok(Array.isArray(res.body.browsers));

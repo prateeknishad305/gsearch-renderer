@@ -5,8 +5,11 @@ const http2 = require('http2');
 const tls = require('tls');
 const zlib = require('zlib');
 
-const UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36';
+const uaMask = require('./uaMask');
+const UA = uaMask.sanitizeUa(
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36'
+);
+const CH_HEADERS = uaMask.chHeaders(uaMask.profileFrom({ ua: UA, flavorId: 'chromium' }));
 
 function chromeHeaders(cookie, extra) {
   return {
@@ -16,9 +19,7 @@ function chromeHeaders(cookie, extra) {
     'accept-language': 'en-US,en;q=0.9',
     'accept-encoding': 'gzip, deflate, br',
     'upgrade-insecure-requests': '1',
-    'sec-ch-ua': '"Google Chrome";v="155", "Chromium";v="155", "Not.A/Brand";v="24"',
-    'sec-ch-ua-mobile': '?0',
-    'sec-ch-ua-platform': '"Windows"',
+    ...CH_HEADERS,
     'sec-fetch-dest': 'document',
     'sec-fetch-mode': 'navigate',
     'sec-fetch-site': extra && extra.site ? extra.site : 'none',

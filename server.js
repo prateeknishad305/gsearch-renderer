@@ -44,6 +44,8 @@ const statsHandler = require('./api/stats');
 const serperHandler = require('./api/serper');
 const shodanIpHandler = require('./api/shodanIp');
 const cacheHandler = require('./api/cache');
+const dashboardHandler = require('./api/dashboard');
+const { apply: fdTune } = require('./api/lib/fdTune');
 
 const PORT = parseInt(process.env.PORT, 10) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -131,11 +133,13 @@ function route(pathname, method) {
   if (path === '/api/shodan/ip' || path === '/shodan/ip') return shodanIpHandler;
   if (path === '/api/stats' || path === '/stats') return statsHandler;
   if (path === '/api/cache' || path === '/cache') return cacheHandler;
+  if (path === '/api/dashboard' || path === '/dashboard') return dashboardHandler;
   return null;
 }
 
 async function handle(req, res) {
   wrapRes(res);
+  res.req = req;
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   req.query = parseQuery(url.searchParams);
 
@@ -154,6 +158,7 @@ async function handle(req, res) {
         shodan_ip: 'GET /api/shodan/ip?ips=1.2.3.4,5.6.7.8',
         stats: 'GET /api/stats',
         cache: 'GET|DELETE /api/cache',
+        dashboard: 'GET /api/dashboard',
         health: 'GET /api/health',
       },
     });
@@ -224,6 +229,7 @@ function listen() {
   });
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
+  fdTune();
   startProxyFetcher();
   server.on('error', (err) => {
     if (err && err.code === 'EADDRINUSE') {

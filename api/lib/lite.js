@@ -7,11 +7,14 @@ const zlib = require('zlib');
 const { URL } = require('url');
 const { isGarbageUrl, isAiModeTitle } = require('./resultFilter');
 
+const uaMask = require('./uaMask');
 const CHROME_MAJOR = '155';
-const UA =
+const UA = uaMask.sanitizeUa(
   `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ` +
-  `(KHTML, like Gecko) Chrome/${CHROME_MAJOR}.0.0.0 Safari/537.36`;
-const CH_UA = `"Google Chrome";v="${CHROME_MAJOR}", "Chromium";v="${CHROME_MAJOR}", "Not.A/Brand";v="24"`;
+    `(KHTML, like Gecko) Chrome/${CHROME_MAJOR}.0.0.0 Safari/537.36`
+);
+const CH_HEADERS = uaMask.chHeaders(uaMask.profileFrom({ ua: UA, flavorId: 'chromium' }));
+const CH_UA = CH_HEADERS['sec-ch-ua'];
 
 const ENDPOINTS = {
   duckduckgo: ({ q, kl, s }) => {
@@ -439,7 +442,7 @@ function isBlockedPage(html, engine) {
   const low = raw.toLowerCase();
   const google = engine === 'google' || engine === 'google_lite';
   if (google) {
-    if (/\/sorry\//i.test(raw) || /id="captcha"/i.test(low)) return true;
+    if (/\/sorry\//i.test(raw) || /id="captcha"/i.test(low) || /cf-turnstile|challenges\.cloudflare|h-captcha|g-recaptcha/i.test(low)) return true;
     if (/<h3/i.test(raw) || /<cite/i.test(raw) || /\/url\?q=/i.test(raw)) return false;
     return true;
   }
@@ -459,9 +462,7 @@ function chromeHeaders(target) {
     'accept-language': 'en-US,en;q=0.9',
     'accept-encoding': 'gzip, deflate, br',
     'upgrade-insecure-requests': '1',
-    'sec-ch-ua': CH_UA,
-    'sec-ch-ua-mobile': '?0',
-    'sec-ch-ua-platform': '"Windows"',
+    ...CH_HEADERS,
     'sec-fetch-dest': 'document',
     'sec-fetch-mode': 'navigate',
     'sec-fetch-site': 'none',

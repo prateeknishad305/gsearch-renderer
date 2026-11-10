@@ -33,6 +33,9 @@ const stats = require('./lib/stats');
 const g = require('./lib/google');
 const googleIp = require('./lib/googleIp');
 const proxyRace = require('./lib/proxyRace');
+const intent = require('./lib/intent');
+const sandbox = require('./lib/sandbox');
+const proxyChain = require('./lib/proxyChain');
 
 const MAX_NUM = 100;
 const MAX_PAGES = 10;
@@ -238,8 +241,9 @@ function buildGoogleTries(explicitProxy, stickyKey) {
 function buildTries(explicitProxy, proxyless, engine, stickyKey) {
   const google = isGoogleEngine(engine);
   if (proxyless) return [null];
-  if (google) return buildGoogleTries(explicitProxy, stickyKey);
-  if (explicitProxy) return [explicitProxy];
+  const chained = explicitProxy ? proxyChain.chromiumProxy(explicitProxy) : null;
+  if (google) return buildGoogleTries(chained || explicitProxy, stickyKey);
+  if (chained || explicitProxy) return [chained || explicitProxy];
   try {
     const { getLivePool, refreshLivePool } = require('./lib/proxyFetch');
     if (!getLivePool().length) refreshLivePool().catch(() => {});
@@ -344,7 +348,6 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
       e.code = 'NO_ATTEMPT';
       return { pageResults: null, used: null, dur: 0, localAttempts: 0, err: e };
     }
-    let skipProxies = false;
     const width = proxyRace.raceWidth();
 
     async function attempt(candidate, signal) {
@@ -356,11 +359,6 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
       if (Date.now() > deadline) {
         const e = new Error('deadline');
         e.code = 'TIMEOUT';
-        throw e;
-      }
-      if (skipProxies && candidate) {
-        const e = new Error('skip proxy');
-        e.code = 'SKIP';
         throw e;
       }
       if (candidate && googleIp.shouldSkip(candidate)) {
@@ -395,7 +393,7 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
 
     for (const group of proxyRace.batches(candidates, width)) {
       if (Date.now() > deadline) break;
-      const batch = skipProxies ? group.filter((c) => !c) : group;
+      const batch = group.filter((c) => !c || !googleIp.shouldSkip(c));
       if (!batch.length) continue;
       try {
         const win = await proxyRace.firstOk(batch.map((c) => (signal) => attempt(c, signal)));
@@ -409,9 +407,6 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
         err = caught;
         if (caught && caught.code === 'UNKNOWN_ENGINE') throw caught;
         if (isGoogleEngine(engine)) dropStickyGoogleProxy(stickyKey);
-        if (isHardBlock(caught)) {
-          if (isGoogleEngine(engine)) skipProxies = true;
-        }
       }
     }
     if (!pageResults && proxyless && isNetFail(err) && String(process.env.PROXYLESS_STRICT || '0') !== '1') {
@@ -557,7 +552,7 @@ async function handleSearch(req, res) {
   if (req.method !== 'GET') {
     return send(res, { error: 'Method not allowed', http_status: 405 });
   }
-  if (!authOk(req)) return unauthorized(res);
+  if (!authOk(req)) return unauthorized(res, req);
 
   const q = String(req.query.q || '').trim();
   if (!q) {
@@ -575,8 +570,20 @@ async function handleSearch(req, res) {
   if (q.length > MAX_QUERY_LEN) {
     return send(res, { error: `Query too long (max ${MAX_QUERY_LEN} chars)`, http_status: 400 });
   }
+  const sand = sandbox.inspectQuery(q);
+  if (!sand.ok) {
+    return send(res, {
+      success: false,
+      code: 'BLOCKED_QUERY',
+      error: 'Query targets a private or local host',
+      blocked: sand.blocked,
+      http_status: 400,
+    });
+  }
 
-  const engineList = parseEngineList(req);
+  let engineList = parseEngineList(req);
+  const intentInfo = intent.preferEngines(q, engineList);
+  if (intent.routingEnabled()) engineList = intentInfo.list.filter((e) => ENGINES[e] || e === 'google');
   const unknown = engineList.filter((e) => !ENGINES[e]);
   if (unknown.length) {
     return send(res, {
@@ -708,10 +715,12 @@ async function handleSearch(req, res) {
     };
     const mergeExtras = ok[0] && ok[0].r && ok[0].r.extras;
     if (mergeExtras) {
-      if (mergeExtras.knowledgeGraph) body.knowledgeGraph = mergeExtras.knowledgeGraph;
-      if (mergeExtras.peopleAlsoAsk) body.peopleAlsoAsk = mergeExtras.peopleAlsoAsk;
-      if (mergeExtras.relatedSearches) body.relatedSearches = mergeExtras.relatedSearches;
-      if (mergeExtras.answerBox) body.answerBox = mergeExtras.answerBox;
+          if (mergeExtras.knowledgeGraph) body.knowledgeGraph = mergeExtras.knowledgeGraph;
+          if (mergeExtras.peopleAlsoAsk) body.peopleAlsoAsk = mergeExtras.peopleAlsoAsk;
+          if (mergeExtras.relatedSearches) body.relatedSearches = mergeExtras.relatedSearches;
+          if (mergeExtras.answerBox) body.answerBox = mergeExtras.answerBox;
+          if (mergeExtras.maps) body.maps = mergeExtras.maps;
+          if (mergeExtras.shopping) body.shopping = mergeExtras.shopping;
     }
     if (explain) {
       body.diagnostics = {
@@ -800,6 +809,8 @@ async function handleSearch(req, res) {
         if (r.extras.peopleAlsoAsk) body.peopleAlsoAsk = r.extras.peopleAlsoAsk;
         if (r.extras.relatedSearches) body.relatedSearches = r.extras.relatedSearches;
         if (r.extras.answerBox) body.answerBox = r.extras.answerBox;
+        if (r.extras.maps) body.maps = r.extras.maps;
+        if (r.extras.shopping) body.shopping = r.extras.shopping;
       }
       if (explain) {
         body.diagnostics = {

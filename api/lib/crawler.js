@@ -3,6 +3,7 @@
 const { withPage } = require('./browserPool');
 const { getShardPool, intEnv } = require('./proxyPool');
 const { unwrapGoogleHref } = require('./googleExtract');
+const sandbox = require('./sandbox');
 
 const MAX_PAGES = 20;
 const MAX_DEPTH = 3;
@@ -62,7 +63,7 @@ function isAllowedUrl(raw, origin, sameOriginOnly) {
   } catch {
     return null;
   }
-  if (isPrivateHostname(host)) return null;
+  if (isPrivateHostname(host) || sandbox.isPrivateHost(host)) return null;
   if (sameOriginOnly && origin && !sameOrigin(url, origin)) return null;
   return url;
 }
