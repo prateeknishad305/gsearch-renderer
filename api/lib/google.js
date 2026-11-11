@@ -230,12 +230,10 @@ function extraHeaders(geo, chromeMajor) {
     Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
     'Upgrade-Insecure-Requests': '1',
   };
-  if (envFlag('GOOGLE_CH_UA', true)) {
-    const uaMask = require('./uaMask');
-    const flavor = require('./browserFlavor');
-    const ua = uaMask.sanitizeUa(flavor.uaFor('chromium', major));
-    Object.assign(out, uaMask.chHeaders(uaMask.profileFrom({ ua, flavorId: 'chromium' })));
-    out['User-Agent'] = ua;
+  if (envFlag('GOOGLE_CH_UA', false)) {
+    out['sec-ch-ua'] = `"Google Chrome";v="${major}", "Chromium";v="${major}", "Not.A/Brand";v="24"`;
+    out['sec-ch-ua-mobile'] = '?0';
+    out['sec-ch-ua-platform'] = '"Windows"';
   }
   return out;
 }

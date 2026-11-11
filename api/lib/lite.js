@@ -7,14 +7,11 @@ const zlib = require('zlib');
 const { URL } = require('url');
 const { isGarbageUrl, isAiModeTitle } = require('./resultFilter');
 
-const uaMask = require('./uaMask');
 const CHROME_MAJOR = '155';
-const UA = uaMask.sanitizeUa(
+const UA =
   `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ` +
-    `(KHTML, like Gecko) Chrome/${CHROME_MAJOR}.0.0.0 Safari/537.36`
-);
-const CH_HEADERS = uaMask.chHeaders(uaMask.profileFrom({ ua: UA, flavorId: 'chromium' }));
-const CH_UA = CH_HEADERS['sec-ch-ua'];
+  `(KHTML, like Gecko) Chrome/${CHROME_MAJOR}.0.0.0 Safari/537.36`;
+const CH_UA = `"Google Chrome";v="${CHROME_MAJOR}", "Chromium";v="${CHROME_MAJOR}", "Not.A/Brand";v="24"`;
 
 const ENDPOINTS = {
   duckduckgo: ({ q, kl, s }) => {
@@ -479,7 +476,9 @@ function chromeHeaders(target) {
     'accept-language': 'en-US,en;q=0.9',
     'accept-encoding': 'gzip, deflate, br',
     'upgrade-insecure-requests': '1',
-    ...CH_HEADERS,
+    'sec-ch-ua': CH_UA,
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"Windows"',
     'sec-fetch-dest': 'document',
     'sec-fetch-mode': 'navigate',
     'sec-fetch-site': 'none',
@@ -876,4 +875,15 @@ async function fastLiteSearch({ engine, query, num = 10, hl = 'en', gl = 'us', s
   };
 }
 
-module.exports = { fastLiteSearch, ENDPOINTS, PARSERS, JSON_ENGINES, isBlockedPage, isJsShell, chromeFetchTargets, chromeFetchDirectOk };
+module.exports = {
+  fastLiteSearch,
+  ENDPOINTS,
+  PARSERS,
+  JSON_ENGINES,
+  isBlockedPage,
+  isJsShell,
+  chromeFetchTargets,
+  chromeFetchDirectOk,
+  chromeHeaders,
+  UA,
+};

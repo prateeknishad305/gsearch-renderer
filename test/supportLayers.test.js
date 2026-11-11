@@ -302,13 +302,36 @@ test('ua mask apply covers page navigator, uaData, workers, no canvas or mouse',
   void origThis;
 });
 
-test('google extraHeaders emit full client hints matching the claimed Chrome UA', () => {
+test('google extraHeaders stay off by default so lite HTTP is not fingerprint-blocked', () => {
   const h = extraHeaders({ acceptLanguage: 'en-US,en;q=0.9' }, 155);
-  assert.match(h['User-Agent'], /Chrome\/155/);
-  assert.doesNotMatch(h['User-Agent'], /Headless/);
-  assert.match(h['sec-ch-ua'], /Google Chrome";v="155"/);
+  assert.equal(h['User-Agent'], undefined);
+  assert.equal(h['sec-ch-ua'], undefined);
+  assert.equal(h['sec-ch-ua-full-version'], undefined);
+  const prev = process.env.GOOGLE_CH_UA;
+  process.env.GOOGLE_CH_UA = '1';
+  try {
+    const on = extraHeaders({ acceptLanguage: 'en-US,en;q=0.9' }, 155);
+    assert.match(on['sec-ch-ua'], /Google Chrome";v="155"/);
+    assert.equal(on['sec-ch-ua-mobile'], '?0');
+    assert.equal(on['sec-ch-ua-platform'], '"Windows"');
+    assert.equal(on['sec-ch-ua-full-version'], undefined);
+  } finally {
+    if (prev === undefined) delete process.env.GOOGLE_CH_UA;
+    else process.env.GOOGLE_CH_UA = prev;
+  }
+});
+
+test('google_lite HTTP headers match the pre-mask Chrome set', () => {
+  const { chromeHeaders } = require('../api/lib/lite');
+  const h = chromeHeaders(new URL('https://www.google.com/search?q=hello'));
+  assert.match(h['user-agent'], /Chrome\/155/);
+  assert.doesNotMatch(h['user-agent'], /Headless/);
+  assert.equal(h['sec-ch-ua'], '"Google Chrome";v="155", "Chromium";v="155", "Not.A/Brand";v="24"');
   assert.equal(h['sec-ch-ua-mobile'], '?0');
-  assert.match(h['sec-ch-ua-full-version'], /155\.0\.0\.0/);
+  assert.equal(h['sec-ch-ua-platform'], '"Windows"');
+  assert.equal(h['sec-ch-ua-full-version'], undefined);
+  assert.equal(h['sec-ch-ua-full-version-list'], undefined);
+  assert.match(h.cookie, /CONSENT=YES/);
 });
 
 test('chrome fetch keeps organic SERPs even when recaptcha scripts are present', () => {
