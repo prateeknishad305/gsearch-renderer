@@ -20,6 +20,7 @@ const features = require('../api/lib/features');
 const uaMask = require('../api/lib/uaMask');
 const { isSorryUrl, extraHeaders, FIXES } = require('../api/lib/google');
 const { isBlockedPage } = require('../api/lib/lite');
+const chromeFetch = require('../api/lib/chromeFetch');
 const { route } = require('../server');
 
 test('captcha and turnstile detect as BLOCKED and never route to a solver', () => {
@@ -45,6 +46,27 @@ test('captcha and turnstile detect as BLOCKED and never route to a solver', () =
   assert.equal(challenge.rotateOnChallenge({ code: 'TIMEOUT' }), false);
   assert.equal(isSorryUrl('https://challenges.cloudflare.com/turnstile'), true);
   assert.equal(isBlockedPage('<div class="cf-turnstile"></div>', 'google'), true);
+  assert.equal(
+    isBlockedPage(
+      '<h3>Hello world</h3><cite>https://example.com</cite><div class="g-recaptcha"></div><script src="https://www.google.com/recaptcha/api.js"></script>',
+      'google'
+    ),
+    false
+  );
+  assert.equal(isBlockedPage('<div class="g-recaptcha"></div>', 'google'), true);
+  assert.equal(
+    challenge.detectChallenge({
+      url: 'https://www.google.com/search?q=hello',
+      html: '<h3>Hello</h3><cite>https://en.wikipedia.org/wiki/Hello</cite><div class="g-recaptcha"></div>',
+    }),
+    null
+  );
+  const recapOnly = challenge.detectChallenge({
+    url: 'https://www.google.com/search?q=hello',
+    html: '<div class="g-recaptcha"></div>',
+  });
+  assert.equal(recapOnly.code, 'BLOCKED');
+  assert.equal(recapOnly.type, 'recaptcha');
 });
 
 test('proxy chain parses hops and uses the last hop as Chromium egress', () => {
@@ -287,4 +309,20 @@ test('google extraHeaders emit full client hints matching the claimed Chrome UA'
   assert.match(h['sec-ch-ua'], /Google Chrome";v="155"/);
   assert.equal(h['sec-ch-ua-mobile'], '?0');
   assert.match(h['sec-ch-ua-full-version'], /155\.0\.0\.0/);
+});
+
+test('chrome fetch keeps organic SERPs even when recaptcha scripts are present', () => {
+  const page = { url: () => 'https://www.google.com/search?q=hello', _lastTitle: 'hello - Google Search' };
+  const serp =
+    '<h3>Hello world</h3><cite>https://en.wikipedia.org/wiki/Hello_world</cite>' +
+    '<script src="https://www.google.com/recaptcha/api.js"></script><div class="g-recaptcha"></div>';
+  assert.equal(chromeFetch.hasOrganicHits(serp), true);
+  assert.equal(chromeFetch.isBlocked('google', page, serp), false);
+  assert.equal(chromeFetch.isBlocked('google', page, '<div class="g-recaptcha"></div>'), true);
+  const sorry = { url: () => 'https://www.google.com/sorry/index?continue=x', _lastTitle: '' };
+  assert.equal(chromeFetch.isBlocked('google', sorry, serp), true);
+  assert.equal(chromeFetch.fetchOn(), true);
+  const src = chromeFetch.fetchHtml.toString();
+  assert.doesNotMatch(src, /NO_PROXY/);
+  assert.doesNotMatch(src, /no proxy/);
 });

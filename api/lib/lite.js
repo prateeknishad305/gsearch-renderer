@@ -436,14 +436,31 @@ function googleCookieHeader() {
   return `CONSENT=YES+cb.20210328-17-p0.en+FX+${stamp}; SOCS=CAI`;
 }
 
+function hasGoogleHits(raw) {
+  return /<h3[\s>]/i.test(raw) || /<cite[\s>]/i.test(raw);
+}
+
+function isJsShell(html) {
+  const raw = String(html || '');
+  const low = raw.toLowerCase();
+  if (/enablejs|httpservice\/retry\/enablejs/i.test(low)) return true;
+  if (/please enable javascript|enable javascript to (?:view|continue|use)/i.test(low)) return true;
+  if (/<noscript>[\s\S]{0,800}(?:enablejs|javascript)/i.test(raw) && !hasGoogleHits(raw)) return true;
+  return false;
+}
+
 function isBlockedPage(html, engine) {
   if (JSON_ENGINES.has(engine)) return false;
   const raw = String(html || '');
   const low = raw.toLowerCase();
   const google = engine === 'google' || engine === 'google_lite';
   if (google) {
-    if (/\/sorry\//i.test(raw) || /id="captcha"/i.test(low) || /cf-turnstile|challenges\.cloudflare|h-captcha|g-recaptcha/i.test(low)) return true;
-    if (/<h3/i.test(raw) || /<cite/i.test(raw) || /\/url\?q=/i.test(raw)) return false;
+    const hits = hasGoogleHits(raw);
+    if (isJsShell(raw) && !hits) return true;
+    if (/\/sorry\//i.test(raw) && !hits) return true;
+    if (/id="captcha"/i.test(low) && !hits) return true;
+    if (!hits && /cf-turnstile|challenges\.cloudflare|h-captcha|g-recaptcha/i.test(low)) return true;
+    if (hits) return false;
     return true;
   }
   if (/\banomaly/i.test(low)) return true;
@@ -703,6 +720,18 @@ async function fetchDirect(url, engine, headers) {
   return html;
 }
 
+function chromeFetchDirectOk() {
+  return String(process.env.PROXY_FALLBACK_DIRECT || '1') !== '0';
+}
+
+function chromeFetchTargets(engine) {
+  const pool = liveProxies(engine).filter(Boolean).sort(() => Math.random() - 0.5);
+  const n = Math.max(1, Math.min(2, parseInt(process.env.CHROME_FETCH_WORKERS, 10) || 1));
+  const tries = pool.slice(0, n);
+  if (!tries.length || chromeFetchDirectOk()) tries.push(null);
+  return tries;
+}
+
 async function fetchChromeGoogle(url, engine) {
   const chromeFetch = require('./chromeFetch');
   if (!chromeFetch.fetchOn()) {
@@ -711,18 +740,11 @@ async function fetchChromeGoogle(url, engine) {
     throw e;
   }
   const timeoutMs = Math.max(8000, parseInt(process.env.CHROME_FETCH_MS, 10) || 12000);
-  const pool = liveProxies(engine).filter(Boolean).sort(() => Math.random() - 0.5);
-  const n = Math.max(1, Math.min(2, parseInt(process.env.CHROME_FETCH_WORKERS, 10) || 1));
-  const tries = pool.slice(0, n);
-  if (!tries.length) {
-    const e = new Error('no proxy');
-    e.code = 'NO_PROXY';
-    throw e;
-  }
+  const tries = chromeFetchTargets(engine);
   let lastErr = null;
   for (const proxy of tries) {
     try {
-      const r = await chromeFetch.fetchHtml(url, { proxy, timeoutMs, engine });
+      const r = await chromeFetch.fetchHtml(url, { proxy: proxy || undefined, timeoutMs, engine });
       const loc = r && r.finalUrl;
       if (loc && /\/sorry\//i.test(loc)) {
         lastErr = Object.assign(new Error('sorry'), { code: 'BLOCKED' });
@@ -732,8 +754,9 @@ async function fetchChromeGoogle(url, engine) {
         lastErr = Object.assign(new Error(`status ${r.status}`), { code: 'LITE_HTTP_ERROR' });
         continue;
       }
+      const hits = r && Array.isArray(r.results) && r.results.length;
       let html = r && r.html;
-      if (!html || isBlockedPage(html, engine)) {
+      if (!hits && (!html || isBlockedPage(html, engine))) {
         lastErr = Object.assign(new Error('blocked'), { code: 'BLOCKED' });
         continue;
       }
@@ -767,18 +790,13 @@ async function fetchLitePage(url, engine) {
     try {
       return { html: await fetchDirect(url, engine, headers) };
     } catch (directErr) {
-      if (engine === 'google_lite') {
-        try {
-          return await fetchChromeGoogle(url, engine);
-        } catch (chromeErr) {
-          const e = new Error(`Lite fetch failed: ${(chromeErr && chromeErr.message) || (directErr && directErr.message) || 'chrome'}`);
-          e.code = (chromeErr && chromeErr.code) || (directErr && directErr.code) || 'LITE_FETCH_ERROR';
-          throw e;
-        }
+      try {
+        return await fetchChromeGoogle(url, engine);
+      } catch (chromeErr) {
+        const e = new Error(`Lite fetch failed: ${(chromeErr && chromeErr.message) || (directErr && directErr.message) || 'chrome'}`);
+        e.code = (chromeErr && chromeErr.code) || (directErr && directErr.code) || 'LITE_FETCH_ERROR';
+        throw e;
       }
-      const e = new Error(`Lite fetch failed: ${(directErr && directErr.message) || 'direct'}`);
-      e.code = (directErr && directErr.code) || 'LITE_FETCH_ERROR';
-      throw e;
     }
   }
   if (engine === 'mojeek') {
@@ -858,4 +876,4 @@ async function fastLiteSearch({ engine, query, num = 10, hl = 'en', gl = 'us', s
   };
 }
 
-module.exports = { fastLiteSearch, ENDPOINTS, PARSERS, JSON_ENGINES, isBlockedPage };
+module.exports = { fastLiteSearch, ENDPOINTS, PARSERS, JSON_ENGINES, isBlockedPage, isJsShell, chromeFetchTargets, chromeFetchDirectOk };

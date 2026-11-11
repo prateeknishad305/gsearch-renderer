@@ -86,10 +86,16 @@ function itemsToHtml(site, items) {
     .join('');
 }
 
+function hasOrganicHits(html) {
+  const h = String(html || '');
+  return /<h3[\s>]/i.test(h) || /<cite[\s>]/i.test(h) || /results-standard/i.test(h);
+}
+
 function isBlocked(site, page, html) {
   const loc = page.url() || '';
+  if (site === 'google' && /\/sorry\//i.test(loc)) return true;
+  if (hasOrganicHits(html)) return false;
   if (challenge.detectChallenge({ url: loc, html, title: page._lastTitle })) return true;
-  if (site === 'google') return /\/sorry\//i.test(loc);
   const low = String(html || '').toLowerCase();
   if (/^captcha$/i.test((page._lastTitle || ''))) return true;
   if (/<title>\s*captcha\s*<\/title>/i.test(html || '')) return true;
@@ -171,11 +177,6 @@ async function fetchHtml(url, { proxy, timeoutMs, engine } = {}) {
     e.code = 'SKIP';
     throw e;
   }
-  if (!proxy) {
-    const e = new Error('no proxy');
-    e.code = 'NO_PROXY';
-    throw e;
-  }
   const timeout = Math.max(8000, timeoutMs || intEnv('CHROME_FETCH_MS', 8000));
   const site = siteOf(engine);
   const r = await withPage(
@@ -198,4 +199,4 @@ async function fetchHtml(url, { proxy, timeoutMs, engine } = {}) {
   return r;
 }
 
-module.exports = { fetchHtml, fetchOn };
+module.exports = { fetchHtml, fetchOn, isBlocked, hasOrganicHits };

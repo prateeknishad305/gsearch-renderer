@@ -15,12 +15,21 @@ function kind(blob) {
   return 'captcha';
 }
 
+function hasOrganicHits(html) {
+  const h = String(html || '');
+  return /<h3[\s>]/i.test(h) || /<cite[\s>]/i.test(h) || /results-standard/i.test(h);
+}
+
 function detectChallenge({ url, html, title } = {}) {
   const u = String(url || '');
   const h = String(html || '');
   const t = String(title || '');
   const blob = `${u}\n${t}\n${h}`;
-  if (CAPTCHA_URL.test(u) || /^captcha$/i.test(t) || /turnstile/i.test(t) || CAPTCHA_HTML.test(blob)) {
+  if (CAPTCHA_URL.test(u) || /^captcha$/i.test(t) || /turnstile/i.test(t)) {
+    return { type: kind(blob), code: 'BLOCKED' };
+  }
+  if (hasOrganicHits(h)) return null;
+  if (CAPTCHA_HTML.test(blob)) {
     return { type: kind(blob), code: 'BLOCKED' };
   }
   return null;
@@ -48,4 +57,4 @@ function rotateOnChallenge(err) {
   return code === 'BLOCKED' || code === 'SORRY';
 }
 
-module.exports = { detectChallenge, blockedError, routeToSolver, rotateOnChallenge, CAPTCHA_URL, CAPTCHA_HTML };
+module.exports = { detectChallenge, blockedError, routeToSolver, rotateOnChallenge, hasOrganicHits, CAPTCHA_URL, CAPTCHA_HTML };

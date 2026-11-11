@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const circuit = require('../api/lib/circuit');
-const { PARSERS, ENDPOINTS, isBlockedPage } = require('../api/lib/lite');
+const { PARSERS, ENDPOINTS, isBlockedPage, isJsShell, chromeFetchTargets, chromeFetchDirectOk } = require('../api/lib/lite');
 
 test('circuit opens after consecutive failures and closes on OK', () => {
   circuit.reset();
@@ -115,6 +115,56 @@ test('captcha and anti-bot html is blocked for mojeek qwant yandex', () => {
   const y = ENDPOINTS.yandex({ q: 'hello', s: 10 });
   assert.match(y, /yandex\.com\/search/);
   assert.equal(new URL(y).searchParams.get('p'), '1');
+});
+
+test('google js-shell html is blocked so chrome-fetch can run', () => {
+  const shell =
+    '<!DOCTYPE html><html><head><title>Google</title>' +
+    '<noscript><meta http-equiv="refresh" content="0;url=/httpservice/retry/enablejs?continue=/search"></noscript>' +
+    '</head><body><script>window.google=window.google||{};</script></body></html>';
+  assert.equal(isJsShell(shell), true);
+  assert.equal(isBlockedPage(shell, 'google'), true);
+  assert.equal(isBlockedPage(shell, 'google_lite'), true);
+  const serp = '<h3 class="r"><a href="/url?q=https://example.com/a">Alpha</a></h3><cite>example.com</cite>';
+  assert.equal(isJsShell(serp), false);
+  assert.equal(isBlockedPage(serp, 'google'), false);
+});
+
+test('google recaptcha widget on a real SERP is not a block', () => {
+  const serp =
+    '<h3 class="r"><a href="/url?q=https://en.wikipedia.org/wiki/Hello">Hello</a></h3>' +
+    '<cite>https://en.wikipedia.org/wiki/Hello</cite>' +
+    '<script src="https://www.google.com/recaptcha/api.js"></script>' +
+    '<div class="g-recaptcha" data-sitekey="x"></div>';
+  assert.equal(isBlockedPage(serp, 'google'), false);
+  assert.equal(isBlockedPage(serp, 'google_lite'), false);
+  assert.equal(isBlockedPage('<div class="g-recaptcha"></div>', 'google'), true);
+  assert.equal(isBlockedPage('<div id="captcha"></div>', 'google'), true);
+  assert.equal(isBlockedPage('<h3>Ok</h3><div id="captcha"></div>', 'google'), false);
+});
+
+test('chrome fetch falls back to a direct (no proxy) attempt', () => {
+  const prev = process.env.PROXY_FALLBACK_DIRECT;
+  delete process.env.PROXY_FALLBACK_DIRECT;
+  try {
+    assert.equal(chromeFetchDirectOk(), true);
+    const targets = chromeFetchTargets('google_lite');
+    assert.ok(targets.includes(null), 'direct hop must be present');
+  } finally {
+    if (prev === undefined) delete process.env.PROXY_FALLBACK_DIRECT;
+    else process.env.PROXY_FALLBACK_DIRECT = prev;
+  }
+});
+
+test('chrome fetch skips the direct hop when PROXY_FALLBACK_DIRECT=0 and proxies exist', () => {
+  const prev = process.env.PROXY_FALLBACK_DIRECT;
+  process.env.PROXY_FALLBACK_DIRECT = '0';
+  try {
+    assert.equal(chromeFetchDirectOk(), false);
+  } finally {
+    if (prev === undefined) delete process.env.PROXY_FALLBACK_DIRECT;
+    else process.env.PROXY_FALLBACK_DIRECT = prev;
+  }
 });
 
 test('google lite parser reads h3/url?q=', () => {
