@@ -28,9 +28,11 @@ gsearch-api scrapes search engines with plain HTTP. Some engines (Google, DuckDu
 | `nocache` | `0`      | Set to `1` to bypass the results cache |
 | `debug`   | `0`      | Set to `1` to skip the lite path/cache and include `debug_html` |
 | `token`   | *(none)* | API token when `API_TOKEN` is set on the deployment |
-| `browser` | `chromium` | Render flavor: `chromium`, `firefox`, `edge`, `safari`, `brave`, `tor`. Uses a native binary when installed; otherwise Chromium with that browser's UA. |
+| `browser` | `chromium` | Render flavor: `chromium`, `firefox`, `edge`, `safari`, `brave`, `tor`, `camoufox`. Uses a native binary when installed; otherwise Chromium with that browser's UA. `camoufox` uses the Camoufox Firefox fork (strongest fingerprint spoofing in 2026) — place binary at `/usr/bin/camoufox` or set `CAMOUFOX_PATH`. |
 
 Engines: `google`, `bing`, `brave`, `mojeek`, `startpage`, `yahoo`, `duckduckgo`, `duckduckgo_lite`, `qwant`, `ecosia`, `swisscows`, `seznam`, `yandex`, `shodan`, `marginalia`, `wiby`, `github`, `wikipedia`, `archive`. `shodan` scrapes public `shodan.io/search` HTML (no API key). `github` / `wikipedia` / `archive` keep same-host result URLs.
+
+Render flavors: `chromium`, `firefox`, `edge`, `safari`, `brave`, `tor`, `camoufox`. Each uses a native binary when installed; otherwise Chromium with that browser's UA. `camoufox` is the Camoufox Firefox fork with strongest fingerprint spoofing (canvas, WebGL, fonts, audio, CDP patches).
 
 `engines=google,bing` tries in order (fallback). `mode=merge` runs them in parallel and unions unique URLs. `engines=*` / `engines=all` tries every engine. Lite HTTP is used first for engines that serve static SERP HTML (Google `gbv=2`, DDG, Bing, Brave, Yahoo, Mojeek, Ecosia, Startpage); Chromium is the fallback. `browser=firefox|edge|safari|brave|tor` sets the render UA (and a native binary when installed). Proxies are auto-classified residential vs datacenter (host/user heuristics; bare IPs = DC). Google Chromium prefers residential and skips DC when any resi exit exists. Lite and other engines use DC first, then **direct IP** (`PROXY_FALLBACK_DIRECT`, default on).
 
@@ -122,7 +124,7 @@ interstitial), retries with another member before falling back to a direct reque
 
 | Env var             | Default | Description |
 |---------------------|---------|-------------|
-| `BROWSER`           | `chromium` | Default render flavor (`chromium`, `firefox`, `edge`, `safari`, `brave`, `tor`). Overridden by `?browser=`. Native binary when installed; else Chromium + that UA. |
+| `BROWSER`           | `chromium` | Default render flavor (`chromium`, `firefox`, `edge`, `safari`, `brave`, `tor`, `camoufox`). Overridden by `?browser=`. Native binary when installed; else Chromium + that UA. |
 | `BROWSER_REUSE`     | `1`     | Reuse a long-lived Chromium + page pool per process (big win on containers; a no-op on Vercel where browsers are reaped). `0` = one browser per request. |
 | `BROWSER_IDLE_MS`   | `120000`| Close an idle pooled browser after this long |
 | `MAX_CONTEXTS`      | `4` (`1` on Vercel) | Max concurrent tabs per instance (bounds memory) |
@@ -634,6 +636,34 @@ Host N instances with the same `PROXY_POOL` (or the live fetcher) but a distinct
 | `HOST` | `0.0.0.0` | Bind address for `server.js` |
 
 `GET /api/health` includes `runtime.platform` and `runtime.chromium_source` so you can confirm which binary an instance is using.
+
+### Camoufox (strongest fingerprint spoofing)
+
+Camoufox is a Firefox fork with built-in fingerprint spoofing (canvas, WebGL, fonts, audio, CDP patches). It passes bot checks that plain Playwright Chromium fails.
+
+**Install:**
+```bash
+# Download latest from https://github.com/daijro/camoufox/releases
+curl -L "https://github.com/daijro/camoufox/releases/download/v158.0.1-beta.41/camoufox-158.0.1-beta.41-lin.x86_64.zip" -o camoufox.zip
+unzip camoufox.zip -d camoufox
+sudo cp camoufox/camoufox-bin /usr/bin/camoufox
+sudo chmod +x /usr/bin/camoufox
+# Also copy libs (omni.ja, *.so files) to same directory
+```
+
+**Use:**
+```bash
+# Default flavor (if binary found)
+BROWSER=camoufox node server.js
+
+# Or explicit path
+CAMOUFOX_PATH=/opt/camoufox/camoufox-bin BROWSER=camoufox node server.js
+
+# Per-request override
+curl "http://localhost:3000/api/search?q=test&engine=chrome&browser=camoufox"
+```
+
+**Note:** Camoufox uses Gecko engine. Google still blocks datacenter IPs regardless of fingerprint. For Google results, provide residential proxies via `PROXY_POOL` or run on a residential IP. The `chrome` engine works because it uses an internal proxy pool with occasional unblocked exits.
 
 ## Use from gsearch-api
 
