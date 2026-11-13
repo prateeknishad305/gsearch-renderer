@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 
-const NAMES = ['chromium', 'firefox', 'edge', 'safari', 'brave', 'tor'];
+const NAMES = ['chromium', 'firefox', 'edge', 'safari', 'brave', 'tor', 'camoufox'];
 
 const ALIAS = {
   chrome: 'chromium',
@@ -12,6 +12,8 @@ const ALIAS = {
   webkit: 'safari',
   torbrowser: 'tor',
   'tor-browser': 'tor',
+  camoufox: 'camoufox',
+  camoufox: 'camoufox',
 };
 
 const BINARIES = {
@@ -57,6 +59,13 @@ const BINARIES = {
     '/usr/bin/torbrowser',
     '/opt/tor-browser/Browser/firefox',
   ],
+  camoufox: [
+    process.env.CAMOUFOX_PATH,
+    '/usr/bin/camoufox',
+    '/usr/local/bin/camoufox',
+    '/opt/camoufox/camoufox',
+    '/Applications/Camoufox.app/Contents/MacOS/camoufox',
+  ],
 };
 
 function existingPath(p) {
@@ -92,7 +101,7 @@ function normalizeFlavor(name) {
 
 function uaFor(id, major) {
   const m = String(major || 125);
-  if (id === 'firefox') {
+  if (id === 'firefox' || id === 'camoufox') {
     return `Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0`;
   }
   if (id === 'safari') {
@@ -114,12 +123,12 @@ function chUa(id, major) {
   const m = String(major || 125);
   if (id === 'edge') return `"Microsoft Edge";v="${m}", "Chromium";v="${m}", "Not.A/Brand";v="24"`;
   if (id === 'brave') return `"Brave";v="${m}", "Chromium";v="${m}", "Not.A/Brand";v="24"`;
-  if (id === 'firefox' || id === 'safari' || id === 'tor') return null;
+  if (id === 'firefox' || id === 'safari' || id === 'tor' || id === 'camoufox') return null;
   return `"Google Chrome";v="${m}", "Chromium";v="${m}", "Not.A/Brand";v="24"`;
 }
 
 function engineFor(id, native) {
-  if (native && (id === 'firefox' || id === 'tor')) return 'firefox';
+  if (native && (id === 'firefox' || id === 'tor' || id === 'camoufox')) return 'firefox';
   if (native && id === 'safari') return 'webkit';
   return 'chromium';
 }
@@ -127,7 +136,7 @@ function engineFor(id, native) {
 function resolveFlavor(name) {
   const id = normalizeFlavor(name);
   const bin = findBinary(id);
-  const gecko = id === 'firefox' || id === 'tor';
+  const gecko = id === 'firefox' || id === 'tor' || id === 'camoufox';
   const webkit = id === 'safari';
   const native = !!(bin && (gecko || webkit || id === 'edge' || id === 'brave' || id === 'chromium'));
   const useNativeGecko = !!(bin && gecko);
