@@ -10,6 +10,7 @@
 
 const { resolveLaunch } = require('./chromium');
 const flavor = require('./browserFlavor');
+const uaMask = require('./uaMask');
 
 let pwMod = null;
 
@@ -93,15 +94,17 @@ function stealthMarkup() {
   } catch {}
 }
 
-async function newSearchContext({ proxy }) {
-  const browser = await launchBrowser({ disableHttp2: !!proxy });
-  const ua = await resolveUA(browser, DESKTOP_UA);
+async function newSearchContext({ proxy, hl, gl, browser: existingBrowser } = {}) {
+  const browser = existingBrowser || await launchBrowser({ disableHttp2: !!proxy });
+  const ua = await resolveUA(browser, DESKTOP_UA, 'chromium');
+  const profile = uaMask.profileFrom({ ua, flavorId: 'chromium', langs: ['en-US', 'en'] });
   const opts = {
     locale: 'en-US',
     timezoneId: 'America/New_York',
-    userAgent: ua,
+    userAgent: profile.ua,
     viewport: { width: 1366, height: 900 },
     colorScheme: 'light',
+    extraHTTPHeaders: uaMask.chHeaders(profile),
   };
   if (proxy) {
     // Split embedded credentials out of the URL: Chromium's network service
@@ -111,10 +114,11 @@ async function newSearchContext({ proxy }) {
   }
   try {
     const context = await browser.newContext(opts);
+    await context.addInitScript(uaMask.apply.toString() + ';(' + uaMask.apply.toString() + ')(' + JSON.stringify(profile) + ');');
     await context.addInitScript(stealthMarkup);
     return { browser, context };
   } catch (err) {
-    await browser.close().catch(() => {});
+    if (!existingBrowser) await browser.close().catch(() => {});
     throw err;
   }
 }

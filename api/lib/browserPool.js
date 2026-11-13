@@ -1,6 +1,6 @@
 'use strict';
 
-const { launchBrowser, parseProxy, stealthMarkup, resolveUA, DESKTOP_UA } = require('./browser');
+const { launchBrowser, newSearchContext, parseProxy, stealthMarkup, resolveUA, DESKTOP_UA } = require('./browser');
 
 function intEnv(name, dflt) {
   const v = parseInt(process.env[name], 10);
@@ -124,33 +124,7 @@ async function getBrowser({ disableHttp2 = false, browser: browserName } = {}) {
 }
 
 async function newContext(browser, { proxy, hl, gl, google, browser: browserName, javascript } = {}) {
-  const flavorId = require('./browserFlavor').normalizeFlavor(browserName);
-  const ua = await resolveUA(browser, DESKTOP_UA, flavorId);
-  const g = google ? require('./google') : null;
-  const geoOpts = g ? g.contextOptions({ proxy, hl, gl, chromeMajor: (ua.match(/Chrome\/(\d+)/) || [])[1] }) : null;
-  const opts = {
-    locale: (geoOpts && geoOpts.locale) || 'en-US',
-    timezoneId: (geoOpts && geoOpts.timezoneId) || 'America/New_York',
-    userAgent: ua,
-    viewport: (geoOpts && geoOpts.viewport) || { width: 1366, height: 768 },
-    colorScheme: 'light',
-    hasTouch: false,
-    javaScriptEnabled: javascript !== false,
-  };
-  const headers = geoOpts && geoOpts.extraHTTPHeaders ? { ...geoOpts.extraHTTPHeaders } : {};
-  const ch = require('./browserFlavor').chUa(flavorId, (ua.match(/Chrome\/(\d+)/) || [])[1] || 125);
-  if (ch) {
-    headers['sec-ch-ua'] = ch;
-  } else {
-    delete headers['sec-ch-ua'];
-    delete headers['sec-ch-ua-mobile'];
-    delete headers['sec-ch-ua-platform'];
-  }
-  if (Object.keys(headers).length) opts.extraHTTPHeaders = headers;
-  if (proxy) opts.proxy = parseProxy(proxy);
-  const context = await browser.newContext(opts);
-  if (g) await context.addInitScript(g.googleInitScript, { langs: g.languageList(geoOpts && geoOpts.geo) });
-  else await context.addInitScript(stealthMarkup);
+  const { context } = await newSearchContext({ proxy, hl, gl, browser });
   return context;
 }
 

@@ -117,9 +117,18 @@ function noFallbackRequested(query) {
   );
 }
 
+// GOOGLE_STANDALONE=1 makes Google engines (google, google_lite, chrome) only
+// try themselves, without falling back to DuckDuckGo/Bing.
+function googleStandalone() {
+  return String(process.env.GOOGLE_STANDALONE || '0') !== '0';
+}
+
 function resolveTryList(engineList, query) {
   const noFallback = noFallbackRequested(query);
   if (noFallback) return { noFallback, tryList: engineList.slice() };
+  if (googleStandalone() && engineList.length === 1 && isGoogleEngine(engineList[0])) {
+    return { noFallback: true, tryList: engineList.slice() };
+  }
   return { noFallback, tryList: withFallbacks(engineList) };
 }
 
@@ -146,6 +155,7 @@ function withGoogleLiteFallback(list) {
 function withFallbacks(list) {
   const out = withGoogleLiteFallback(list);
   if (!autoFallbackEnabled()) return out;
+  if (googleStandalone() && list.length === 1 && isGoogleEngine(list[0])) return out;
   const seen = new Set(out);
   for (const e of AUTO_FALLBACK_CHAIN) {
     if (!seen.has(e)) {
@@ -702,7 +712,7 @@ async function handleSearch(req, res) {
       response_time_ms: Date.now() - t0,
       source: ok.map((s) => s.r.source).filter(Boolean).join(',') || 'none',
       browser,
-      auto_fallback: autoFallbackEnabled() && !noFallbackRequested(req.query),
+      auto_fallback: autoFallbackEnabled() && !noFallbackRequested(req.query) && !googleStandalone(),
       dork: dorkBody(ok.length ? ok[0].engine : engineList[0]),
       dedupe: wantDedupe,
     };
@@ -791,7 +801,7 @@ async function handleSearch(req, res) {
         source: r.source,
         proxy: maskProxy(r.proxy),
         browser,
-        auto_fallback: !noFallback,
+        auto_fallback: !noFallback && !googleStandalone(),
         dork: dorkBody(engine),
         dedupe: wantDedupe,
       };
@@ -805,7 +815,7 @@ async function handleSearch(req, res) {
         body.diagnostics = {
           mode: 'fallback',
           requested_engine: requested,
-          auto_fallback: !noFallback,
+          auto_fallback: !noFallback && !googleStandalone(),
           engines: attemptsDetail,
         };
       }
@@ -846,7 +856,7 @@ async function handleSearch(req, res) {
     results: [],
     duration_ms: Date.now() - t0,
     response_time_ms: Date.now() - t0,
-    auto_fallback: !noFallback,
+    auto_fallback: !noFallback && !googleStandalone(),
     dork: dorkBody(requested),
     dedupe: wantDedupe,
   };
@@ -854,7 +864,7 @@ async function handleSearch(req, res) {
     failed.diagnostics = {
       mode: 'fallback',
       requested_engine: requested,
-      auto_fallback: !noFallback,
+      auto_fallback: !noFallback && !googleStandalone(),
       engines: attemptsDetail,
     };
   }
