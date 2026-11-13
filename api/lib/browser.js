@@ -11,12 +11,89 @@
 const { resolveLaunch } = require('./chromium');
 const flavor = require('./browserFlavor');
 const uaMask = require('./uaMask');
+const fs = require('fs');
+const path = require('path');
+const { execSync } = require('child_process');
 
 let pwMod = null;
+let camoufoxInstalled = false;
 
 function loadPlaywrightMod() {
   if (!pwMod) pwMod = require('playwright-core');
   return pwMod;
+}
+
+const CAMOUFOX_VERSION = 'v158.0.1-beta.41';
+const CAMOUFOX_BASE_URL = `https://github.com/daijro/camoufox/releases/download/${CAMOUFOX_VERSION}`;
+const CAMOUFOX_LINUX_URL = `${CAMOUFOX_BASE_URL}/camoufox-${CAMOUFOX_VERSION}-lin.x86_64.zip`;
+const CAMOUFOX_INSTALL_DIR = '/opt/camoufox';
+const CAMOUFOX_BIN = path.join(CAMOUFOX_INSTALL_DIR, 'camoufox-bin');
+
+function ensureCamoufox() {
+  if (camoufoxInstalled) return Promise.resolve(CAMOUFOX_BIN);
+  
+  // Check if already installed
+  if (fs.existsSync(CAMOUFOX_BIN) && fs.existsSync(path.join(CAMOUFOX_INSTALL_DIR, 'omni.ja'))) {
+    try {
+      fs.chmodSync(CAMOUFOX_BIN, 0o755);
+      camoufoxInstalled = true;
+      return Promise.resolve(CAMOUFOX_BIN);
+    } catch {}
+  }
+  
+  return new Promise((resolve, reject) => {
+    console.log('[camoufox] Not found, downloading...');
+    const tmpZip = '/tmp/camoufox-auto.zip';
+    const extractDir = '/tmp/camoufox-auto';
+    
+    // Download
+    const downloadCmd = `curl -L "${CAMOUFOX_LINUX_URL}" -o "${tmpZip}" 2>/dev/null`;
+    try {
+      execSync(downloadCmd, { timeout: 300000, stdio: 'ignore' });
+    } catch (e) {
+      return reject(new Error('Camoufox download failed: ' + e.message));
+    }
+    
+    // Extract
+    try {
+      execSync(`rm -rf "${extractDir}" && mkdir -p "${extractDir}" && unzip -q "${tmpZip}" -d "${extractDir}"`, { stdio: 'ignore' });
+    } catch (e) {
+      return reject(new Error('Camoufox extract failed: ' + e.message));
+    }
+    
+    // Install
+    try {
+      execSync(`mkdir -p "${CAMOUFOX_INSTALL_DIR}" && cp -r "${extractDir}/camoufox/"* "${CAMOUFOX_INSTALL_DIR}/"`, { stdio: 'ignore' });
+      fs.chmodSync(CAMOUFOX_BIN, 0o755);
+      // Also ensure gfxtest is executable
+      const gfxtest = path.join(CAMOUFOX_INSTALL_DIR, 'gfxtest');
+      if (fs.existsSync(gfxtest)) fs.chmodSync(gfxtest, 0o755);
+      camoufoxInstalled = true;
+      console.log('[camoufox] Installed at', CAMOUFOX_BIN);
+      resolve(CAMOUFOX_BIN);
+    } catch (e) {
+      reject(new Error('Camoufox install failed: ' + e.message));
+    }
+  });
+}
+
+function getCamoufoxPath() {
+  // Check env first
+  if (process.env.CAMOUFOX_PATH && fs.existsSync(process.env.CAMOUFOX_PATH)) {
+    return process.env.CAMOUFOX_PATH;
+  }
+  // Check standard locations
+  const standardPaths = [
+    CAMOUFOX_BIN,
+    '/usr/bin/camoufox',
+    '/usr/local/bin/camoufox',
+    '/opt/camoufox/camoufox',
+    '/opt/camoufox/camoufox-bin',
+  ];
+  for (const p of standardPaths) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
 }
 
 const STEALTH_ARGS = ['--disable-blink-features=AutomationControlled', '--no-first-run'];
@@ -31,6 +108,22 @@ async function launchBrowser({ disableHttp2 = false, browser: browserName } = {}
   const extra = disableHttp2 ? ['--disable-http2'] : [];
   const g = require('./google');
   const pw = loadPlaywrightMod();
+  
+  // Auto-install Camoufox if requested and not found
+  if (spec.id === 'camoufox' && spec.engine === 'firefox') {
+    let camoufoxPath = getCamoufoxPath();
+    if (!camoufoxPath) {
+      try {
+        camoufoxPath = await ensureCamoufox();
+      } catch (e) {
+        console.warn('[camoufox] Auto-install failed:', e.message);
+      }
+    }
+    if (camoufoxPath) {
+      spec.executablePath = camoufoxPath;
+    }
+  }
+  
   if (spec.engine === 'firefox') {
     const opts = { headless: true };
     if (spec.executablePath) opts.executablePath = spec.executablePath;
@@ -92,6 +185,43 @@ function stealthMarkup() {
           : q.call(navigator.permissions, p);
     }
   } catch {}
+  try {
+    Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+    Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+    Object.defineProperty(navigator, 'maxTouchPoints', { get: () => 0 });
+    Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+  } catch {}
+  try {
+    const originalQuery = window.navigator.permissions.query;
+    window.navigator.permissions.query = (parameters) =>
+      parameters.name === 'notifications'
+        ? Promise.resolve({ state: Notification.permission })
+        : originalQuery(parameters);
+  } catch {}
+  try {
+    const gl = document.createElement('canvas').getContext('webgl');
+    if (gl) {
+      const getParameter = gl.getParameter.bind(gl);
+      gl.getParameter = (parameter) => {
+        if (parameter === 37445) return 'Intel Inc.';
+        if (parameter === 37446) return 'Intel Iris OpenGL Engine';
+        return getParameter(parameter);
+      };
+    }
+  } catch {}
+  try {
+    const toDataURL = HTMLCanvasElement.prototype.toDataURL;
+    HTMLCanvasElement.prototype.toDataURL = function(type) {
+      if (type === 'image/png') {
+        const ctx = this.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = 'rgb(255, 0, 0)';
+          ctx.fillRect(0, 0, 1, 1);
+        }
+      }
+      return toDataURL.apply(this, arguments);
+    };
+  } catch {}
 }
 
 async function newSearchContext({ proxy, hl, gl, browser: existingBrowser } = {}) {
@@ -142,12 +272,53 @@ function parseProxy(proxy) {
   }
 }
 
+async function launchBrowserWithVPNExtension({ disableHttp2 = false, browser: browserName } = {}) {
+  const spec = flavor.resolveFlavor(browserName);
+  const extra = disableHttp2 ? ['--disable-http2'] : [];
+  const g = require('./google');
+  const pw = loadPlaywrightMod();
+  
+  const extensionPath = process.env.VPN_EXTENSION_PATH;
+  if (!extensionPath) {
+    throw new Error('VPN_EXTENSION_PATH not set');
+  }
+  
+  const vpnArgs = [
+    `--disable-extensions-except=${extensionPath}`,
+    `--load-extension=${extensionPath}`,
+  ];
+  
+  if (spec.engine === 'firefox') {
+    const opts = { headless: false };
+    if (spec.executablePath) opts.executablePath = spec.executablePath;
+    return pw.firefox.launch(opts);
+  }
+  if (spec.engine === 'webkit') {
+    const opts = { headless: false };
+    if (spec.executablePath) opts.executablePath = spec.executablePath;
+    return pw.webkit.launch(opts);
+  }
+  
+  const launch = await require('./chromium').resolveLaunch();
+  const exe = spec.executablePath && (spec.id === 'edge' || spec.id === 'brave') ? spec.executablePath : launch.executablePath;
+  
+  return pw.chromium.launch({
+    args: [...launch.args, ...STEALTH_ARGS, ...g.chromiumArgs(), ...extra, ...vpnArgs],
+    executablePath: exe,
+    headless: false,
+    ignoreDefaultArgs: ['--enable-automation'],
+  });
+}
+
 module.exports = {
   launchBrowser,
+  launchBrowserWithVPNExtension,
   newSearchContext,
   DESKTOP_UA,
   parseProxy,
   stealthMarkup,
   resolveUA,
   flavor,
+  ensureCamoufox,
+  getCamoufoxPath,
 };
