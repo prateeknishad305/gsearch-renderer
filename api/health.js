@@ -6,6 +6,36 @@ const { stats: browserStats } = require('./lib/browserPool');
 const { getCache } = require('./lib/cache');
 const { runtimeInfo } = require('./lib/chromium');
 const { send, cors } = require('./lib/http');
+const { getCamoufoxPath } = require('./lib/browser');
+const fs = require('fs');
+
+let camoufoxConnected = null;
+let camoufoxCheckTime = 0;
+const CAMOUFOX_CHECK_TTL = 30000;
+
+async function checkCamoufox() {
+  const now = Date.now();
+  if (camoufoxConnected !== null && now - camoufoxCheckTime < CAMOUFOX_CHECK_TTL) {
+    return camoufoxConnected;
+  }
+  const camoufoxPath = getCamoufoxPath();
+  if (!camoufoxPath || !fs.existsSync(camoufoxPath)) {
+    camoufoxConnected = false;
+    camoufoxCheckTime = now;
+    return false;
+  }
+  try {
+    const { launchBrowser } = require('./lib/browser');
+    const browser = await launchBrowser({ browser: 'camoufox' });
+    const version = await browser.version();
+    await browser.close().catch(() => {});
+    camoufoxConnected = { connected: true, version, path: camoufoxPath };
+  } catch (e) {
+    camoufoxConnected = { connected: false, error: e.message, path: camoufoxPath };
+  }
+  camoufoxCheckTime = now;
+  return camoufoxConnected;
+}
 
 // GET /api/health - cheap liveness/rotation introspection for load balancers
 // and for the operator to confirm which proxy shard an instance owns.
@@ -17,6 +47,7 @@ module.exports = async (req, res) => {
   if (req.method !== 'GET') {
     return send(res, { error: 'Method not allowed', http_status: 405 });
   }
+  const camoufox = await checkCamoufox();
   return send(res, {
     service: 'gsearch-renderer',
     ok: true,
@@ -28,6 +59,7 @@ module.exports = async (req, res) => {
     browsers: require('./lib/browserFlavor').listFlavors(),
     browser: browserStats(),
     cache: getCache().stats(),
+    camoufox,
     features: {
       lite_fast: String(process.env.LITE_FAST || '1') !== '0',
       browser_reuse: String(process.env.BROWSER_REUSE || '1') !== '0',
@@ -38,7 +70,7 @@ module.exports = async (req, res) => {
       auto_fallback: String(process.env.AUTO_FALLBACK || '1') !== '0',
       internetdb: String(process.env.INTERNETDB || '1') !== '0',
       filter_social: String(process.env.FILTER_SOCIAL || '1') !== '0',
-      filter_dev: String(process.env.FILTER_DEV || '0') !== '0',
+      filter_dev: String(process.env.FILTER_DEV || '0') === '1',
       dork_mode: true,
       pagination: true,
       batch: true,

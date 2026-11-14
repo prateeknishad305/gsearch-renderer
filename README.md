@@ -78,7 +78,7 @@ POST JSON is also accepted: `{ "url": "https://example.com", "max_pages": 3, "ma
 ### `GET /api/health`
 
 Cheap introspection for a load balancer / the operator: `pool` (`proxies_available`, shard config; fetcher URL is never returned),
-`browser` (`browserConnected`, `freePages`, `busyPages`, reuse + active/queued contexts), `browsers` (flavor binaries/native/fallback), `cache` stats, `engines`, `features`.
+`browser` (`browserConnected`, `freePages`, `busyPages`, reuse + active/queued contexts), `browsers` (flavor binaries/native/fallback), `cache` stats, `engines`, `features`, `camoufox` (connection status: `connected: true|false`, `version`, `path`, or `error`).
 
 ### `GET|POST|DELETE /api/proxies`
 

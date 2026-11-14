@@ -82,14 +82,28 @@ function getCamoufoxPath() {
   if (process.env.CAMOUFOX_PATH && fs.existsSync(process.env.CAMOUFOX_PATH)) {
     return process.env.CAMOUFOX_PATH;
   }
-  // Check standard locations
+  // Check standard locations - prefer full install with libs
   const standardPaths = [
     CAMOUFOX_BIN,
-    '/usr/bin/camoufox',
-    '/usr/local/bin/camoufox',
-    '/opt/camoufox/camoufox',
+    '/opt/camoufox_full/camoufox-bin',
+    '/opt/camoufox_fixed/camoufox-bin',
     '/opt/camoufox/camoufox-bin',
+    '/opt/camoufox/camoufox',
+    '/usr/local/bin/camoufox',
+    '/usr/bin/camoufox',
   ];
+  for (const p of standardPaths) {
+    if (fs.existsSync(p)) {
+      // Verify it has required libs nearby (in same dir or browser/ subdir)
+      const dir = path.dirname(p);
+      if (fs.existsSync(path.join(dir, 'omni.ja')) || 
+          fs.existsSync(path.join(dir, 'libxul.so')) ||
+          fs.existsSync(path.join(dir, 'browser', 'omni.ja'))) {
+        return p;
+      }
+    }
+  }
+  // Fallback to any existing binary
   for (const p of standardPaths) {
     if (fs.existsSync(p)) return p;
   }
