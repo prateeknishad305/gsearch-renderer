@@ -241,15 +241,19 @@ function stealthMarkup() {
 async function newSearchContext({ proxy, hl, gl, browser: existingBrowser } = {}) {
   const browser = existingBrowser || await launchBrowser({ disableHttp2: !!proxy });
   const ua = await resolveUA(browser, DESKTOP_UA, 'chromium');
-  const profile = uaMask.profileFrom({ ua, flavorId: 'chromium', langs: ['en-US', 'en'] });
+  // UA masking can create client-hint/UA mismatches that services like Google
+  // treat as automation (Google serves /sorry). It is therefore OFF by default;
+  // opt in with UA_MASK=1 if you need to spoof the UA for a specific site.
+  const useUaMask = String(process.env.UA_MASK || '0') === '1';
+  const profile = useUaMask ? uaMask.profileFrom({ ua, flavorId: 'chromium', langs: ['en-US', 'en'] }) : null;
   const opts = {
     locale: 'en-US',
     timezoneId: 'America/New_York',
-    userAgent: profile.ua,
+    userAgent: useUaMask && profile ? profile.ua : ua,
     viewport: { width: 1366, height: 900 },
     colorScheme: 'light',
-    extraHTTPHeaders: uaMask.chHeaders(profile),
   };
+  if (useUaMask && profile) opts.extraHTTPHeaders = uaMask.chHeaders(profile);
   if (proxy) {
     // Split embedded credentials out of the URL: Chromium's network service
     // fails CONNECT with 407 unless credentials are passed as explicit
@@ -258,7 +262,9 @@ async function newSearchContext({ proxy, hl, gl, browser: existingBrowser } = {}
   }
   try {
     const context = await browser.newContext(opts);
-    await context.addInitScript(uaMask.apply.toString() + ';(' + uaMask.apply.toString() + ')(' + JSON.stringify(profile) + ');');
+    if (useUaMask && profile) {
+      await context.addInitScript(uaMask.apply.toString() + ';(' + uaMask.apply.toString() + ')(' + JSON.stringify(profile) + ');');
+    }
     await context.addInitScript(stealthMarkup);
     return { browser, context };
   } catch (err) {

@@ -625,18 +625,31 @@ For 10k+ dorks per run, prefer a long-lived container (`BROWSER_REUSE=1`, defaul
 
 Host N instances with the same `PROXY_POOL` (or the live fetcher) but a distinct `PROXY_SHARD_INDEX` and shared `PROXY_SHARD_TOTAL=N`. Each instance gets a disjoint slice of exits. Put any HTTP load balancer in front and set `API_TOKEN` if the URLs are public.
 
-## Reliable Google results (recommended)
+## Getting real Google results
 
-From a datacenter IP (Vercel, Railway, Render, most VPS), Google redirects real
-browsers to `google.com/sorry` ("unusual traffic"). No fingerprint trick — plain
-Playwright or Camoufox — bypasses this; it is **IP reputation**, not bot detection.
-Free datacenter proxy lists are transient (a proxy that works for a few queries is
-gated minutes later), so they cannot deliver reliable Google results.
+### How the `google` engine works
 
-The one free, ToS-compliant, datacenter-friendly way to get **real Google** is the
-official Custom Search JSON API. Set two env vars and `engine=google`,
-`google_lite`, and `chrome` transparently return Google results via the API
-(`source: "google_cse"`), with no proxies or browser required:
+A **direct** datacenter IP (Railway/Render/VPS with no proxy) is redirected by Google
+to `google.com/sorry`. But rendering Google **through a datacenter proxy exit** works:
+the browser executes the page and real results come back. The free live proxy pool
+has enough unblocked exits for this to succeed, and the renderer races/rotates exits
+until one returns results.
+
+Important: keep **UA masking off** (`UA_MASK` defaults to `0`). The UA-masking layer
+rewrites `navigator`, client hints, and the UA in-page; the resulting
+client-hint/UA mismatch is treated as automation by Google and reliably triggers the
+`/sorry` interstitial. Sending the browser's real UA renders Google fine. Only set
+`UA_MASK=1` if you specifically need UA spoofing for some other site.
+
+So `engine=google` / `chrome` normally return Google results via the browser render
+(`source: "render"`) using the free proxy pool. `google_lite` uses the plain-HTTP
+`gbv=2` path first, then Chrome fallback.
+
+### Optional: official Custom Search JSON API (most reliable)
+
+For guaranteed, quota-based Google (no proxies, no browser), use the official Custom
+Search JSON API. Set two env vars and `engine=google`, `google_lite`, and `chrome`
+return Google results via the API (`source: "google_cse"`):
 
 | Env | Description |
 |-----|-------------|
@@ -646,18 +659,18 @@ official Custom Search JSON API. Set two env vars and `engine=google`,
 | `GOOGLE_CSE_MS` | Per-request timeout, default `8000` |
 
 Free tier is **100 queries/day** (10 results each); higher quotas require billing on
-the Google side. When these vars are unset the renderer falls back to the free proxy
-pool plus headless browser (best-effort, unreliable for Google), then to
-DuckDuckGo/Bing via the normal `auto_fallback` chain. `GET /api/health` reports
-`features.google_cse: true|false`.
+the Google side. When these vars are unset the renderer uses the browser render path
+above, then falls back to DuckDuckGo/Bing via the normal `auto_fallback` chain.
+`GET /api/health` reports `features.google_cse: true|false`.
 
 Tuning for the best-effort free-proxy path (only used when CSE is not configured):
 
 | Env | Default | Description |
 |-----|---------|-------------|
 | `LITE_GOOGLE_RACE` | `10` | Proxies raced in parallel per Google lite attempt |
-| `LITE_GOOGLE_ROUNDS` | `2` | Race rounds before falling back |
-| `LITE_GOOGLE_TIMEOUT_MS` | `6000` | Per-proxy timeout (too low kills slow-but-working exits) |
+| `LITE_GOOGLE_ROUNDS` | `1` | Race rounds before falling back |
+| `LITE_GOOGLE_TIMEOUT_MS` | `3500` | Per-proxy timeout (too low kills slow-but-working exits) |
+| `UA_MASK` | `0` | In-page UA/client-hint spoofing. Keep `0` for Google; `1` to enable |
 
 If you have **residential proxies**, put them in `PROXY_POOL`; hostnames containing
 `resi`, `residential`, `isp`, `mobile`, `rotat`, `sticky`, `country=`, or `city=` are
