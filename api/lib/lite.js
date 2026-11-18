@@ -720,44 +720,36 @@ async function fetchChromeGoogle(url, engine) {
   }
   const timeoutMs = Math.max(8000, parseInt(process.env.CHROME_FETCH_MS, 10) || 12000);
   const pool = liveProxies(engine).filter(Boolean).sort(() => Math.random() - 0.5);
-  const n = Math.max(1, Math.min(2, parseInt(process.env.CHROME_FETCH_WORKERS, 10) || 1));
+  const { firstOk } = require('./proxyRace');
+  const n = Math.max(1, Math.min(6, parseInt(process.env.CHROME_FETCH_WORKERS, 10) || 3));
   const tries = pool.slice(0, n);
   if (!tries.length) {
     const e = new Error('no proxy');
     e.code = 'NO_PROXY';
     throw e;
   }
-  let lastErr = null;
-  for (const proxy of tries) {
-    try {
-      const r = await chromeFetch.fetchHtml(url, { proxy, timeoutMs, engine });
-      const loc = r && r.finalUrl;
-      if (loc && /\/sorry\//i.test(loc)) {
-        lastErr = Object.assign(new Error('sorry'), { code: 'BLOCKED' });
-        continue;
-      }
-      if (r.status && r.status !== 200 && r.status !== 0 && r.status !== 302) {
-        lastErr = Object.assign(new Error(`status ${r.status}`), { code: 'LITE_HTTP_ERROR' });
-        continue;
-      }
-      let html = r && r.html;
-      if (!html || isBlockedPage(html, engine)) {
-        lastErr = Object.assign(new Error('blocked'), { code: 'BLOCKED' });
-        continue;
-      }
-      if (r.extras && html && !/<!--gsearch-extras:/.test(html)) {
-        const { extrasComment } = require('./googleExtract');
-        html += extrasComment(r.extras);
-      }
-      return { html, extras: r.extras || null, results: r.results || null };
-    } catch (err) {
-      lastErr = err;
+  // Race the exits in parallel and keep the first usable page; sequential
+  // tries made one blocked exit cost a whole extra render timeout.
+  const attempt = async (proxy) => {
+    const r = await chromeFetch.fetchHtml(url, { proxy, timeoutMs, engine });
+    const loc = r && r.finalUrl;
+    if (loc && /\/sorry\//i.test(loc)) {
+      throw Object.assign(new Error('sorry'), { code: 'BLOCKED' });
     }
-  }
-  if (lastErr) throw lastErr;
-  const e = new Error('chrome fetch empty');
-  e.code = 'LITE_EMPTY';
-  throw e;
+    if (r.status && r.status !== 200 && r.status !== 0 && r.status !== 302) {
+      throw Object.assign(new Error(`status ${r.status}`), { code: 'LITE_HTTP_ERROR' });
+    }
+    let html = r && r.html;
+    if (!html || isBlockedPage(html, engine)) {
+      throw Object.assign(new Error('blocked'), { code: 'BLOCKED' });
+    }
+    if (r.extras && html && !/<!--gsearch-extras:/.test(html)) {
+      const { extrasComment } = require('./googleExtract');
+      html += extrasComment(r.extras);
+    }
+    return { html, extras: r.extras || null, results: r.results || null };
+  };
+  return firstOk(tries.map((proxy) => () => attempt(proxy)));
 }
 
 async function fetchLitePage(url, engine) {
@@ -767,6 +759,23 @@ async function fetchLitePage(url, engine) {
     accept: JSON_ENGINES.has(engine) ? 'application/json' : 'text/html,application/xhtml+xml',
   };
   if (engine === 'google' || engine === 'google_lite') {
+    // Datacenter exits no longer receive Google's basic HTML over plain HTTP:
+    // they get the JS shell (enablejs) or /sorry, so the HTTP race only burns
+    // time before the browser fallback. Unless residential exits are present,
+    // go straight to the browser fetch. LITE_GOOGLE_HTTP=1 forces the old path.
+    if (engine === 'google_lite') {
+      const httpMode = String(process.env.LITE_GOOGLE_HTTP || 'auto').toLowerCase();
+      let skipHttp = false;
+      try {
+        if (httpMode !== '1' && require('./chromeFetch').fetchOn()) {
+          const { partitionPool } = require('./proxyPool');
+          skipHttp = httpMode === '0' || partitionPool(liveProxies(engine)).residential.length === 0;
+        }
+      } catch {
+        skipHttp = false;
+      }
+      if (skipHttp) return fetchChromeGoogle(url, engine);
+    }
     const rounds = Math.max(1, Math.min(4, parseInt(process.env.LITE_GOOGLE_ROUNDS, 10) || 1));
     const raceW = Math.max(1, Math.min(24, parseInt(process.env.LITE_GOOGLE_RACE, 10) || 10));
     const timeoutMs = Math.max(1200, Math.min(15000, parseInt(process.env.LITE_GOOGLE_TIMEOUT_MS, 10) || 3500));

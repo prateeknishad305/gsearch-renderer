@@ -650,7 +650,11 @@ them only when spoofing for some other site.
 
 So `engine=google` / `chrome` normally return Google results via the browser render
 (`source: "render"`) using the free proxy pool. `google_lite` uses the plain-HTTP
-`gbv=2` path first, then Chrome fallback.
+`gbv=2` path first, then Chrome fallback — **unless no residential exits are
+available**. Datacenter exits now get Google's JS shell (`enablejs`) or `/sorry` over
+plain HTTP, so without residential proxies `google_lite` skips the wasted HTTP round
+and goes straight to a parallel browser fetch (roughly half the latency). Set
+`LITE_GOOGLE_HTTP=1` to force the old HTTP-first behaviour, `0` to always skip it.
 
 ### Optional: official Custom Search JSON API (most reliable)
 
@@ -677,6 +681,9 @@ Tuning for the best-effort free-proxy path (only used when CSE is not configured
 | `LITE_GOOGLE_RACE` | `10` | Proxies raced in parallel per Google lite attempt |
 | `LITE_GOOGLE_ROUNDS` | `1` | Race rounds before falling back |
 | `LITE_GOOGLE_TIMEOUT_MS` | `3500` | Per-proxy timeout (too low kills slow-but-working exits) |
+| `LITE_GOOGLE_HTTP` | `auto` | `google_lite` plain-HTTP attempt: `auto` skips it when no residential exits, `1` forces it, `0` always skips |
+| `CHROME_FETCH_WORKERS` | `3` | Exits raced in parallel for the browser fetch (first usable page wins) |
+| `CHROME_FETCH_MS` | `12000` | Per-exit browser fetch budget; also the browser checkout timeout |
 | `UA_MASK` | `1` | Native UA normalization (headless tokens stripped, real version/platform). Keep `1` for Google |
 | `UA_MASK_HEADERS` | `0` | Inject `sec-ch-ua*` headers. `1` makes Google flag the mismatch |
 | `UA_MASK_JS` | `0` | Patch `navigator`/`userAgentData` in-page. `1` makes Google flag the mismatch |
