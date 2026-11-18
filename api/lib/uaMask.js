@@ -50,17 +50,22 @@ function profileFrom({ ua, flavorId, langs } = {}) {
     platformVersion = '17.5.0';
     oscpu = 'iPhone';
   }
+  const fullMatch = raw.match(/(?:HeadlessChrome|Chrome|Chromium|Edg)\/([\d.]+)/i);
+  const fullVersion = fullMatch ? fullMatch[1] : `${major}.0.0.0`;
   const brands = [];
   if (!firefox && !safari) {
     if (edge) brands.push({ brand: 'Microsoft Edge', version: major });
     else if (id === 'brave') brands.push({ brand: 'Brave', version: major });
-    else brands.push({ brand: 'Google Chrome', version: major });
     brands.push({ brand: 'Chromium', version: major });
-    brands.push({ brand: 'Not.A/Brand', version: '24' });
+    // The sanitized UA advertises "Chrome/<v>", i.e. Google Chrome. Client
+    // hints and userAgentData must say the same or Google flags the mismatch.
+    if (!edge && id !== 'brave') brands.push({ brand: 'Google Chrome', version: major });
+    brands.push({ brand: 'Not_A Brand', version: '24' });
   }
   return {
     ua: raw,
     major,
+    fullVersion,
     flavorId: id,
     platform,
     platformVersion,
@@ -82,8 +87,11 @@ function profileFrom({ ua, flavorId, langs } = {}) {
 
 function chHeaders(profile) {
   if (!profile || !profile.brands || !profile.brands.length) return {};
+  const fullVersion = profile.fullVersion || `${profile.major}.0.0.0`;
   const brands = profile.brands.map((b) => `"${b.brand}";v="${b.version}"`).join(', ');
-  const full = profile.brands.map((b) => `"${b.brand}";v="${b.version}.0.0.0"`).join(', ');
+  const full = profile.brands
+    .map((b) => `"${b.brand}";v="${b.brand === 'Not_A Brand' ? '24.0.0.0' : fullVersion}"`)
+    .join(', ');
   return {
     'sec-ch-ua': brands,
     'sec-ch-ua-mobile': profile.mobile ? '?1' : '?0',
@@ -92,7 +100,7 @@ function chHeaders(profile) {
     'sec-ch-ua-arch': `"${profile.architecture || 'x86'}"`,
     'sec-ch-ua-bitness': `"${profile.bitness || '64'}"`,
     'sec-ch-ua-model': `"${profile.model || ''}"`,
-    'sec-ch-ua-full-version': `"${profile.major}.0.0.0"`,
+    'sec-ch-ua-full-version': `"${fullVersion}"`,
     'sec-ch-ua-full-version-list': full,
   };
 }
@@ -156,8 +164,11 @@ function apply(profile) {
           bitness: profile.bitness || '64',
           model: profile.model || '',
           platformVersion: profile.platformVersion || '15.0.0',
-          uaFullVersion: `${profile.major}.0.0.0`,
-          fullVersionList: brands.map((b) => ({ brand: b.brand, version: `${b.version}.0.0.0` })),
+          uaFullVersion: profile.fullVersion || `${profile.major}.0.0.0`,
+          fullVersionList: brands.map((b) => ({
+            brand: b.brand,
+            version: b.brand === 'Not_A Brand' ? '24.0.0.0' : profile.fullVersion || `${b.version}.0.0.0`,
+          })),
           wow64: false,
           formFactors: profile.mobile ? ['Mobile'] : ['Desktop'],
         };

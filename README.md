@@ -635,11 +635,18 @@ the browser executes the page and real results come back. The free live proxy po
 has enough unblocked exits for this to succeed, and the renderer races/rotates exits
 until one returns results.
 
-Important: keep **UA masking off** (`UA_MASK` defaults to `0`). The UA-masking layer
-rewrites `navigator`, client hints, and the UA in-page; the resulting
-client-hint/UA mismatch is treated as automation by Google and reliably triggers the
-`/sorry` interstitial. Sending the browser's real UA renders Google fine. Only set
-`UA_MASK=1` if you specifically need UA spoofing for some other site.
+UA masking is **on by default** (`UA_MASK=1`), but only normalizes the UA through
+Playwright's native `userAgent` option (headless tokens stripped, version/platform
+taken from the real browser). That keeps the HTTP `User-Agent`, `navigator.userAgent`
+and native client hints self-consistent, which Google accepts.
+
+Do **not** turn on the heavier spoofing layers for Google: injecting fabricated
+`sec-ch-ua` headers (`UA_MASK_HEADERS=1`) or patching `navigator`/`userAgentData` in
+the page (`UA_MASK_JS=1`) makes the identity disagree with the real binary, and Google
+reliably answers with the `unusual traffic` interstitial. The same holds for forcing
+`gbv=2` (`GOOGLE_GBV=1`) and for the duplicate client-hint injection in the request
+layer (`GOOGLE_CH_UA=1`); both default to off. Leave these off for Google and enable
+them only when spoofing for some other site.
 
 So `engine=google` / `chrome` normally return Google results via the browser render
 (`source: "render"`) using the free proxy pool. `google_lite` uses the plain-HTTP
@@ -670,7 +677,11 @@ Tuning for the best-effort free-proxy path (only used when CSE is not configured
 | `LITE_GOOGLE_RACE` | `10` | Proxies raced in parallel per Google lite attempt |
 | `LITE_GOOGLE_ROUNDS` | `1` | Race rounds before falling back |
 | `LITE_GOOGLE_TIMEOUT_MS` | `3500` | Per-proxy timeout (too low kills slow-but-working exits) |
-| `UA_MASK` | `0` | In-page UA/client-hint spoofing. Keep `0` for Google; `1` to enable |
+| `UA_MASK` | `1` | Native UA normalization (headless tokens stripped, real version/platform). Keep `1` for Google |
+| `UA_MASK_HEADERS` | `0` | Inject `sec-ch-ua*` headers. `1` makes Google flag the mismatch |
+| `UA_MASK_JS` | `0` | Patch `navigator`/`userAgentData` in-page. `1` makes Google flag the mismatch |
+| `GOOGLE_GBV` | `0` | Append `gbv=2` to Google URLs (legacy basic HTML) |
+| `GOOGLE_CH_UA` | `0` | Duplicate client-hint injection in the request layer |
 
 If you have **residential proxies**, put them in `PROXY_POOL`; hostnames containing
 `resi`, `residential`, `isp`, `mobile`, `rotat`, `sticky`, `country=`, or `city=` are

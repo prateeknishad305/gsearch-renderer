@@ -137,7 +137,7 @@ function buildSearchUrl({ q, num, start, hl, gl, proxy, viewport, tbs, before, a
   if (envFlag('GOOGLE_FILTER_OFF', false)) p.set('filter', '0');
   const safe = String(process.env.GOOGLE_SAFE || '').trim();
   if (safe) p.set('safe', safe);
-  if (envFlag('GOOGLE_GBV', true)) p.set('gbv', '2');
+  if (envFlag('GOOGLE_GBV', false)) p.set('gbv', '2');
   const vw = (viewport && viewport.width) || 1366;
   const vh = (viewport && viewport.height) || 768;
   if (envFlag('GOOGLE_VIEWPORT_QS', false)) {
@@ -230,12 +230,14 @@ function extraHeaders(geo, chromeMajor) {
     Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
     'Upgrade-Insecure-Requests': '1',
   };
-  if (envFlag('GOOGLE_CH_UA', true)) {
+  // The browser context already owns the (coherent) UA + client-hint identity
+  // when UA_MASK is on. Adding a second User-Agent/sec-ch-ua set here would
+  // contradict it and is therefore opt-in only.
+  if (envFlag('GOOGLE_CH_UA', false)) {
     const uaMask = require('./uaMask');
     const flavor = require('./browserFlavor');
     const ua = uaMask.sanitizeUa(flavor.uaFor('chromium', major));
     Object.assign(out, uaMask.chHeaders(uaMask.profileFrom({ ua, flavorId: 'chromium' })));
-    out['User-Agent'] = ua;
   }
   return out;
 }
