@@ -440,7 +440,16 @@ function isBlockedPage(html, engine) {
   const google = engine === 'google' || engine === 'google_lite';
   if (google) {
     if (/\/sorry\//i.test(raw) || /id="captcha"/i.test(low)) return true;
-    if (/<h3/i.test(raw) || /<cite/i.test(raw) || /\/url\?q=/i.test(raw)) return false;
+    // Google's JS-gate / SPA shell ("enablejs" redirect) contains a stray <H3>
+    // token in its template, so a single marker is not proof of real results.
+    if (/enablejs|httpservice\/retry|if you are not redirected|table,div,span,p\{display:none\}|window\.google\.c\s*=\s*window\.google\.c/i.test(raw)) {
+      return true;
+    }
+    const h3 = (raw.match(/<h3/gi) || []).length;
+    const urlq = (raw.match(/\/url\?q=/gi) || []).length;
+    const cite = (raw.match(/<cite/gi) || []).length;
+    // Real SERPs carry many anchors; require >=2 markers to reject false positives.
+    if (h3 >= 2 || urlq >= 1 || cite >= 1) return false;
     return true;
   }
   if (/\banomaly/i.test(low)) return true;
@@ -758,10 +767,15 @@ async function fetchLitePage(url, engine) {
     accept: JSON_ENGINES.has(engine) ? 'application/json' : 'text/html,application/xhtml+xml',
   };
   if (engine === 'google' || engine === 'google_lite') {
-    try {
-      return { html: await raceProxyFetch(url, engine, 2200) };
-    } catch {
-      /* DC race failed — fall through to direct IP */
+    const rounds = Math.max(1, Math.min(4, parseInt(process.env.LITE_GOOGLE_ROUNDS, 10) || 2));
+    const raceW = Math.max(1, Math.min(24, parseInt(process.env.LITE_GOOGLE_RACE, 10) || 10));
+    const timeoutMs = Math.max(1500, Math.min(15000, parseInt(process.env.LITE_GOOGLE_TIMEOUT_MS, 10) || 6000));
+    for (let round = 0; round < rounds; round += 1) {
+      try {
+        return { html: await raceProxyFetch(url, engine, timeoutMs, raceW) };
+      } catch {
+        /* this batch of exits failed/blocked — next round samples other exits */
+      }
     }
     try {
       return { html: await fetchDirect(url, engine, headers) };

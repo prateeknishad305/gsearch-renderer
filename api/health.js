@@ -83,6 +83,7 @@ module.exports = async (req, res) => {
       google_fixes: require('./lib/google').FIXES.length,
       google_udm: String(process.env.GOOGLE_UDM || '0') === '1',
       google_sticky: String(process.env.GOOGLE_STICKY || '1') !== '0',
+      google_cse: require('./lib/googleCse').configured(),
       proxy_kind: true,
       browser_flavor: true,
       proxy_race: Math.min(16, Math.max(1, parseInt(process.env.PROXY_RACE || '4', 10) || 4)),

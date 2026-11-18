@@ -625,6 +625,44 @@ For 10k+ dorks per run, prefer a long-lived container (`BROWSER_REUSE=1`, defaul
 
 Host N instances with the same `PROXY_POOL` (or the live fetcher) but a distinct `PROXY_SHARD_INDEX` and shared `PROXY_SHARD_TOTAL=N`. Each instance gets a disjoint slice of exits. Put any HTTP load balancer in front and set `API_TOKEN` if the URLs are public.
 
+## Reliable Google results (recommended)
+
+From a datacenter IP (Vercel, Railway, Render, most VPS), Google redirects real
+browsers to `google.com/sorry` ("unusual traffic"). No fingerprint trick — plain
+Playwright or Camoufox — bypasses this; it is **IP reputation**, not bot detection.
+Free datacenter proxy lists are transient (a proxy that works for a few queries is
+gated minutes later), so they cannot deliver reliable Google results.
+
+The one free, ToS-compliant, datacenter-friendly way to get **real Google** is the
+official Custom Search JSON API. Set two env vars and `engine=google`,
+`google_lite`, and `chrome` transparently return Google results via the API
+(`source: "google_cse"`), with no proxies or browser required:
+
+| Env | Description |
+|-----|-------------|
+| `GOOGLE_CSE_KEY` | API key from [console.cloud.google.com](https://console.cloud.google.com) (enable "Custom Search API") |
+| `GOOGLE_CSE_CX` | Programmable Search Engine ID from [programmablesearchengine.google.com](https://programmablesearchengine.google.com) (set it to search the entire web) |
+| `GOOGLE_CSE_SAFE` | `off` (default) or `active` |
+| `GOOGLE_CSE_MS` | Per-request timeout, default `8000` |
+
+Free tier is **100 queries/day** (10 results each); higher quotas require billing on
+the Google side. When these vars are unset the renderer falls back to the free proxy
+pool plus headless browser (best-effort, unreliable for Google), then to
+DuckDuckGo/Bing via the normal `auto_fallback` chain. `GET /api/health` reports
+`features.google_cse: true|false`.
+
+Tuning for the best-effort free-proxy path (only used when CSE is not configured):
+
+| Env | Default | Description |
+|-----|---------|-------------|
+| `LITE_GOOGLE_RACE` | `10` | Proxies raced in parallel per Google lite attempt |
+| `LITE_GOOGLE_ROUNDS` | `2` | Race rounds before falling back |
+| `LITE_GOOGLE_TIMEOUT_MS` | `6000` | Per-proxy timeout (too low kills slow-but-working exits) |
+
+If you have **residential proxies**, put them in `PROXY_POOL`; hostnames containing
+`resi`, `residential`, `isp`, `mobile`, `rotat`, `sticky`, `country=`, or `city=` are
+auto-classified and preferred for Google.
+
 ## Chromium selection
 
 | Env | Default | Description |
@@ -663,7 +701,7 @@ CAMOUFOX_PATH=/opt/camoufox/camoufox-bin BROWSER=camoufox node server.js
 curl "http://localhost:3000/api/search?q=test&engine=chrome&browser=camoufox"
 ```
 
-**Note:** Camoufox uses Gecko engine. Google still blocks datacenter IPs regardless of fingerprint. For Google results, provide residential proxies via `PROXY_POOL` or run on a residential IP. The `chrome` engine works because it uses an internal proxy pool with occasional unblocked exits.
+**Note:** Camoufox uses Gecko engine and beats most JS fingerprint checks, but Google still blocks datacenter IPs at the network layer regardless of fingerprint. Use `GOOGLE_CSE_KEY` + `GOOGLE_CSE_CX` (see "Reliable Google results"), residential proxies via `PROXY_POOL`, or run on a residential IP for Google. Camoufox is still valuable for non-Google engines and for sites that fingerprint the browser.
 
 ## Use from gsearch-api
 

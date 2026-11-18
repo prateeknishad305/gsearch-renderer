@@ -33,6 +33,7 @@ const stats = require('./lib/stats');
 const g = require('./lib/google');
 const googleIp = require('./lib/googleIp');
 const proxyRace = require('./lib/proxyRace');
+const googleCse = require('./lib/googleCse');
 
 const MAX_NUM = 100;
 const MAX_PAGES = 10;
@@ -286,6 +287,29 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
     Date.now() + requestTimeoutMs(),
     deadlineAt || Date.now() + requestTimeoutMs()
   );
+
+  // Official Google Custom Search JSON API: datacenter-friendly, no proxies.
+  // Used as the primary Google path when GOOGLE_CSE_KEY + GOOGLE_CSE_CX are set.
+  if (isGoogleEngine(engine) && !debug && googleCse.configured()) {
+    try {
+      const cse = await googleCse.cseSearch({ query, num: cap, hl, gl, start });
+      if (cse.results && cse.results.length) {
+        circuit.record(engine, 'OK');
+        return {
+          results: cse.results.slice(0, cap),
+          duration_ms: cse.duration_ms,
+          attempts: 1,
+          proxy: null,
+          source: 'google_cse',
+          pages_fetched: Math.ceil(cse.results.length / GOOGLE_PAGE_SIZE) || 1,
+          pages_requested: pageCount,
+          extras: null,
+        };
+      }
+    } catch {
+      // Quota exhausted / misconfigured -> fall through to free proxy + render.
+    }
+  }
 
   const tryLite = !renderOnly && (liteOnly || (!debug && liteEnabled(engine)));
   let liteAttempted = false;
