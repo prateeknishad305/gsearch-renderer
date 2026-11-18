@@ -775,7 +775,8 @@ async function handleSearch(req, res) {
   let lastErr = new Error('no engine produced a result');
   const deadlineAt = Date.now() + searchBudgetMs();
   let prevEngine = null;
-  for (const engine of tryList) {
+  for (let ei = 0; ei < tryList.length; ei += 1) {
+    const engine = tryList[ei];
     if (Date.now() >= deadlineAt - 1500) break;
     if (prevEngine === 'google_lite' && engine === 'chrome') {
       const pause = fallbackDelayMs();
@@ -783,9 +784,14 @@ async function handleSearch(req, res) {
     }
     prevEngine = engine;
     const startedAt = Date.now();
+    // Reserve ~8s per remaining fallback engine so a slow first engine (Google
+    // on datacenter IPs) cannot consume the whole budget and starve the chain.
+    const remaining = tryList.length - ei - 1;
+    const reserve = remaining > 0 ? Math.min(remaining * 8000, Math.max(0, deadlineAt - startedAt - 4000)) : 0;
+    const engineDeadline = Math.min(deadlineAt, startedAt + Math.max(4000, deadlineAt - startedAt - reserve));
     try {
       const engineQuery = dorkMode ? adaptQuery(q, engine) : q;
-      const r = await searchEngine({ engine, query: engineQuery, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless, liteOnly, renderOnly, browser, deadlineAt, tbs, before, after });
+      const r = await searchEngine({ engine, query: engineQuery, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless, liteOnly, renderOnly, browser, deadlineAt: engineDeadline, tbs, before, after });
       let results = shodanOptionsActive(shodanOpts)
         ? applyShodanOptions(r.results, shodanOpts)
         : r.results;

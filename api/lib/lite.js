@@ -767,9 +767,9 @@ async function fetchLitePage(url, engine) {
     accept: JSON_ENGINES.has(engine) ? 'application/json' : 'text/html,application/xhtml+xml',
   };
   if (engine === 'google' || engine === 'google_lite') {
-    const rounds = Math.max(1, Math.min(4, parseInt(process.env.LITE_GOOGLE_ROUNDS, 10) || 2));
+    const rounds = Math.max(1, Math.min(4, parseInt(process.env.LITE_GOOGLE_ROUNDS, 10) || 1));
     const raceW = Math.max(1, Math.min(24, parseInt(process.env.LITE_GOOGLE_RACE, 10) || 10));
-    const timeoutMs = Math.max(1500, Math.min(15000, parseInt(process.env.LITE_GOOGLE_TIMEOUT_MS, 10) || 6000));
+    const timeoutMs = Math.max(1200, Math.min(15000, parseInt(process.env.LITE_GOOGLE_TIMEOUT_MS, 10) || 3500));
     for (let round = 0; round < rounds; round += 1) {
       try {
         return { html: await raceProxyFetch(url, engine, timeoutMs, raceW) };
