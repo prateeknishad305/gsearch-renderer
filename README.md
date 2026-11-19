@@ -653,7 +653,9 @@ So `engine=google` / `chrome` normally return Google results via the browser ren
 `gbv=2` path first, then Chrome fallback — **unless no residential exits are
 available**. Datacenter exits now get Google's JS shell (`enablejs`) or `/sorry` over
 plain HTTP, so without residential proxies `google_lite` skips the wasted HTTP round
-and goes straight to a parallel browser fetch (roughly half the latency). Set
+and goes straight to a parallel browser fetch (roughly half the latency). That browser
+fetch also commits the navigation and waits for the result selector instead of blocking
+on `domcontentloaded`, which Google often never fires through slow exits. Set
 `LITE_GOOGLE_HTTP=1` to force the old HTTP-first behaviour, `0` to always skip it.
 
 ### Optional: official Custom Search JSON API (most reliable)

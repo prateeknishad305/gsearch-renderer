@@ -101,7 +101,10 @@ async function runSearch(page, site, url, timeout) {
     if (t === 'image' || t === 'media' || t === 'font') return route.abort();
     return route.continue();
   }).catch(() => {});
-  const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout });
+  // Commit the navigation and wait for results instead of blocking on
+  // domcontentloaded, which Google frequently never fires through slow proxies.
+  const waitUntil = site === 'google' ? 'commit' : 'domcontentloaded';
+  const resp = await page.goto(url, { waitUntil, timeout });
   const ready = site === 'mojeek' ? 'ul.results-standard li a.ob, ul.results-standard li h2 a' : 'h3, cite';
   await page.waitForSelector(ready, { timeout: Math.min(8000, timeout) }).catch(() => {});
   const status = (resp && resp.status()) || 0;
