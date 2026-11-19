@@ -650,7 +650,13 @@ them only when spoofing for some other site.
 
 So `engine=google` / `chrome` normally return Google results via the browser render
 (`source: "render"`) using the free proxy pool. `google_lite` uses the plain-HTTP
-`gbv=2` path first, then Chrome fallback.
+`gbv=2` path first, then Chrome fallback — **unless no residential exits are
+available**. Datacenter exits now get Google's JS shell (`enablejs`) or `/sorry` over
+plain HTTP, so without residential proxies `google_lite` skips the wasted HTTP round
+and goes straight to a parallel browser fetch (roughly half the latency). That browser
+fetch also commits the navigation and waits for the result selector instead of blocking
+on `domcontentloaded`, which Google often never fires through slow exits. Set
+`LITE_GOOGLE_HTTP=1` to force the old HTTP-first behaviour, `0` to always skip it.
 
 ### Google lite: fewer blocks, lower latency, more signal
 
@@ -660,7 +666,9 @@ wasting time and stops losing results:
 - **Transport ladder** — direct fetch and the proxy exits are raced in
   parallel; the Chromium render is the last resort and is only attempted on
   the final retry round. A blocked datacenter IP used to cost one full render
-  per page, it now costs one per request.
+  per page, it now costs one per request. `LITE_GOOGLE_HTTP` still applies:
+  with no residential exit the ladder starts at the browser instead of
+  burning a plain-HTTP round first.
 - **Exit memory** — every exit is classified once (`tunnel`, `plain`, `gated`,
   `dead`). Exits that were proven unable to tunnel or that just returned an
   interstitial are skipped on later requests instead of being re-probed, so a
@@ -732,6 +740,7 @@ Tuning for the best-effort free-proxy path (only used when CSE is not configured
 | `LITE_GOOGLE_RACE` | `10` | Proxies raced in parallel per Google lite attempt |
 | `LITE_GOOGLE_ROUNDS` | `3` | Retry rounds for the Google lite path. The Chromium fallback is only used on the last round, so a blocked IP costs one render instead of one per round. |
 | `LITE_GOOGLE_TIMEOUT_MS` | `3500` | Per-exit timeout (too low kills slow-but-working exits) |
+| `LITE_GOOGLE_HTTP` | `auto` | `google_lite` plain-HTTP attempt: `auto` skips it when no residential exits, `1` forces it, `0` always skips |
 | `LITE_TOPUP` | `1` | Fetch the next page when a page returns fewer hits than requested, so `num=10` really returns 10 |
 | `LITE_TOPUP_SLACK` | `1` | Extra pages allowed while topping up |
 | `LITE_POOL_WARM_MS` | `2500` | On a cold start, how long to wait for the live proxy list before falling back to the bundled (usually dead) one |
@@ -740,7 +749,8 @@ Tuning for the best-effort free-proxy path (only used when CSE is not configured
 | `GOOGLE_SUGGEST_MS` / `GOOGLE_NEWS_MS` | `2500` / `4000` | Per-request timeouts |
 | `GOOGLE_SUGGEST_LIMIT` / `GOOGLE_NEWS_LIMIT` | `10` | How many items to return per surface |
 | `PROXY_CHECK_TARGET` | *(unset)* | Only keep exits that can `CONNECT` to this `host:port` (e.g. `www.google.com:443`). The default check only proves a proxy is up, not that it can reach Google. |
-| `CHROME_FETCH_WORKERS` | `2` | Exits rendered in parallel by the Chromium fallback |
+| `CHROME_FETCH_WORKERS` | `3` | Exits raced in parallel for the browser fetch (first usable page wins) |
+| `CHROME_FETCH_MS` | `12000` | Per-exit browser fetch budget; also the browser checkout timeout |
 | `UA_MASK` | `1` | Native UA normalization (headless tokens stripped, real version/platform). Keep `1` for Google |
 | `UA_MASK_HEADERS` | `0` | Inject `sec-ch-ua*` headers. `1` makes Google flag the mismatch |
 | `UA_MASK_JS` | `0` | Patch `navigator`/`userAgentData` in-page. `1` makes Google flag the mismatch |

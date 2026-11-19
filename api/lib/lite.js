@@ -690,44 +690,36 @@ async function fetchChromeGoogle(url, engine) {
   }
   const timeoutMs = Math.max(8000, parseInt(process.env.CHROME_FETCH_MS, 10) || 12000);
   const pool = liveProxies(engine).filter(Boolean).sort(() => Math.random() - 0.5);
-  const n = Math.max(1, Math.min(2, parseInt(process.env.CHROME_FETCH_WORKERS, 10) || 1));
+  const { firstOk } = require('./proxyRace');
+  const n = Math.max(1, Math.min(6, parseInt(process.env.CHROME_FETCH_WORKERS, 10) || 3));
   const tries = pool.slice(0, n);
   if (!tries.length) {
     const e = new Error('no proxy');
     e.code = 'NO_PROXY';
     throw e;
   }
-  let lastErr = null;
-  for (const proxy of tries) {
-    try {
-      const r = await chromeFetch.fetchHtml(url, { proxy, timeoutMs, engine });
-      const loc = r && r.finalUrl;
-      if (loc && /\/sorry\//i.test(loc)) {
-        lastErr = Object.assign(new Error('sorry'), { code: 'BLOCKED' });
-        continue;
-      }
-      if (r.status && r.status !== 200 && r.status !== 0 && r.status !== 302) {
-        lastErr = Object.assign(new Error(`status ${r.status}`), { code: 'LITE_HTTP_ERROR' });
-        continue;
-      }
-      let html = r && r.html;
-      if (!html || isBlockedPage(html, engine)) {
-        lastErr = Object.assign(new Error('blocked'), { code: 'BLOCKED' });
-        continue;
-      }
-      if (r.extras && html && !/<!--gsearch-extras:/.test(html)) {
-        const { extrasComment } = require('./googleExtract');
-        html += extrasComment(r.extras);
-      }
-      return { html, extras: r.extras || null, results: r.results || null };
-    } catch (err) {
-      lastErr = err;
+  // Race the exits in parallel and keep the first usable page; sequential
+  // tries made one blocked exit cost a whole extra render timeout.
+  const attempt = async (proxy) => {
+    const r = await chromeFetch.fetchHtml(url, { proxy, timeoutMs, engine });
+    const loc = r && r.finalUrl;
+    if (loc && /\/sorry\//i.test(loc)) {
+      throw Object.assign(new Error('sorry'), { code: 'BLOCKED' });
     }
-  }
-  if (lastErr) throw lastErr;
-  const e = new Error('chrome fetch empty');
-  e.code = 'LITE_EMPTY';
-  throw e;
+    if (r.status && r.status !== 200 && r.status !== 0 && r.status !== 302) {
+      throw Object.assign(new Error(`status ${r.status}`), { code: 'LITE_HTTP_ERROR' });
+    }
+    let html = r && r.html;
+    if (!html || isBlockedPage(html, engine)) {
+      throw Object.assign(new Error('blocked'), { code: 'BLOCKED' });
+    }
+    if (r.extras && html && !/<!--gsearch-extras:/.test(html)) {
+      const { extrasComment } = require('./googleExtract');
+      html += extrasComment(r.extras);
+    }
+    return { html, extras: r.extras || null, results: r.results || null };
+  };
+  return firstOk(tries.map((proxy) => () => attempt(proxy)));
 }
 
 async function fetchLitePage(url, engine) {
@@ -737,32 +729,17 @@ async function fetchLitePage(url, engine) {
     accept: JSON_ENGINES.has(engine) ? 'application/json' : 'text/html,application/xhtml+xml',
   };
   if (engine === 'google' || engine === 'google_lite') {
-    const rounds = Math.max(1, Math.min(4, parseInt(process.env.LITE_GOOGLE_ROUNDS, 10) || 1));
-    const raceW = Math.max(1, Math.min(24, parseInt(process.env.LITE_GOOGLE_RACE, 10) || 10));
+    // The Google path lives in googleLite.js: one transport ladder, one set of
+    // block rules and one exit memory. This branch stays only so the engine
+    // keeps working if it is called directly.
+    const googleLite = require('./googleLite');
     const timeoutMs = Math.max(1200, Math.min(15000, parseInt(process.env.LITE_GOOGLE_TIMEOUT_MS, 10) || 3500));
-    for (let round = 0; round < rounds; round += 1) {
-      try {
-        return { html: await raceProxyFetch(url, engine, timeoutMs, raceW) };
-      } catch {
-        /* this batch of exits failed/blocked — next round samples other exits */
-      }
-    }
-    try {
-      return { html: await fetchDirect(url, engine, headers) };
-    } catch (directErr) {
-      if (engine === 'google_lite') {
-        try {
-          return await fetchChromeGoogle(url, engine);
-        } catch (chromeErr) {
-          const e = new Error(`Lite fetch failed: ${(chromeErr && chromeErr.message) || (directErr && directErr.message) || 'chrome'}`);
-          e.code = (chromeErr && chromeErr.code) || (directErr && directErr.code) || 'LITE_FETCH_ERROR';
-          throw e;
-        }
-      }
-      const e = new Error(`Lite fetch failed: ${(directErr && directErr.message) || 'direct'}`);
-      e.code = (directErr && directErr.code) || 'LITE_FETCH_ERROR';
-      throw e;
-    }
+    return googleLite.fetchGoogleLite({
+      url,
+      geo: googleLite.geoFromUrl(url),
+      proxies: await googleExits(),
+      timeoutMs,
+    });
   }
   if (engine === 'mojeek') {
     try {

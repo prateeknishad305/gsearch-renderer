@@ -79,6 +79,20 @@ function buildLiteUrl({ q, num = 10, start = 0, hl, gl, tbs, before, after, prox
   return { url: `https://${geo.host}/search?${p.toString()}`, geo };
 }
 
+// Recovers the locale from an already built Google URL, so a caller that
+// only has the URL can still send the right Accept-Language.
+function geoFromUrl(url) {
+  try {
+    const u = new URL(String(url || ''));
+    const hl = u.searchParams.get('hl') || 'en';
+    const gl = u.searchParams.get('gl') || 'us';
+    const { ACCEPT } = require('./google');
+    return { hl, gl, acceptLanguage: ACCEPT[hl] || ACCEPT.en };
+  } catch {
+    return { hl: 'en', gl: 'us', acceptLanguage: 'en-US,en;q=0.9' };
+  }
+}
+
 function liteHeaders(geo, extra) {
   const h = {
     'user-agent': UA,
@@ -460,11 +474,10 @@ async function fetchViaChrome(url, proxies, timeoutMs) {
   }
   const timeout = Math.max(8000, timeoutMs || intEnv('CHROME_FETCH_MS', 12000));
   const list = (proxies || []).filter(Boolean).filter((p) => exitState.canUse(p));
-  const workers = Math.max(1, Math.min(3, intEnv('CHROME_FETCH_WORKERS', 2)));
+  const workers = Math.max(1, Math.min(6, intEnv('CHROME_FETCH_WORKERS', 3)));
   // Without a usable exit, render on the host IP: on a residential or clean
   // machine that is the only way to get a SERP at all.
   const tries = list.length ? list.slice(0, workers) : [null];
-  let lastErr = null;
   const render = async (proxy) => {
     const r = await chromeFetch.fetchHtml(url, { proxy, timeoutMs: timeout, engine: 'google' });
     const html = r && r.html;
@@ -479,13 +492,29 @@ async function fetchViaChrome(url, proxies, timeoutMs) {
   };
   // Rendering on several exits at once keeps the latency at the speed of the
   // first usable exit instead of the sum of all the broken ones.
+  const { firstOk } = require('./proxyRace');
   try {
-    return await Promise.any(tries.map((proxy) => render(proxy)));
+    return await firstOk(tries.map((proxy) => () => render(proxy)));
   } catch (err) {
-    lastErr = err;
+    throw err;
   }
-  if (lastErr) throw lastErr;
-  throw new Error('chrome fetch empty');
+}
+
+// Datacenter exits no longer receive Google's basic HTML over plain HTTP: they
+// get the JS shell (enablejs) or /sorry, so the HTTP race only burns time
+// before the browser fallback. Unless a residential exit is present, go
+// straight to the browser. LITE_GOOGLE_HTTP=1 forces the HTTP path,
+// LITE_GOOGLE_HTTP=0 forces the browser.
+function httpIsUseful(proxies) {
+  const mode = String(process.env.LITE_GOOGLE_HTTP || 'auto').toLowerCase();
+  if (mode === '1') return true;
+  if (mode === '0') return false;
+  try {
+    const { partitionPool } = require('./proxyPool');
+    return partitionPool(proxies || []).residential.length > 0;
+  } catch {
+    return true;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -530,6 +559,10 @@ async function fetchGoogleLite({
     attempts = [chromeAttempt];
   } else if (prefer === 'proxy') {
     attempts = [exitsAttempt].concat(allowDirect ? [directAttempt] : []);
+  } else if (!httpIsUseful(proxies)) {
+    // No residential exit: plain HTTP cannot work, so do not spend a race on
+    // it. Go to the browser straight away.
+    attempts = [chromeAttempt];
   } else {
     attempts = (allowDirect ? [directAttempt] : []).concat([exitsAttempt]);
   }
@@ -563,6 +596,7 @@ async function fetchGoogleLite({
 
 module.exports = {
   buildLiteUrl,
+  geoFromUrl,
   liteHeaders,
   isGoogleBlocked,
   looksLikeSerp,
