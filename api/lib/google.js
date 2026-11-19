@@ -503,6 +503,8 @@ function filterResults(results) {
   for (const r of results || []) {
     if (!r || !(r.title || '').trim()) continue;
     if (isAiModeTitle(r.title)) continue;
+    // A heading that is just the destination URL is never a useful title.
+    if (/^https?:\/\//i.test(r.title.trim())) continue;
     const raw = String(r.url || '');
     if (isJunkUrl(raw)) continue;
     let url = isGoogleRel(raw) ? raw : decodeHref(raw);
@@ -515,6 +517,8 @@ function filterResults(results) {
     if (r.displayedLink) item.displayedLink = String(r.displayedLink).trim();
     if (r.date) item.date = String(r.date).trim();
     if (Array.isArray(r.sitelinks) && r.sitelinks.length) item.sitelinks = r.sitelinks;
+    // Same shape as the lite path and the Custom Search API: an explicit rank.
+    item.rank = out.length + 1;
     out.push(item);
   }
   return out;

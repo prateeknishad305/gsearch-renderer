@@ -165,13 +165,15 @@ function hasHits(html, engine) {
   return /<h3/i.test(html) || /<cite/i.test(html);
 }
 
-async function fetchHtml(url, { proxy, timeoutMs, engine } = {}) {
+async function fetchHtml(url, { proxy, timeoutMs, engine, allowDirect = true } = {}) {
   if (!fetchOn()) {
     const e = new Error('chrome fetch off');
     e.code = 'SKIP';
     throw e;
   }
-  if (!proxy) {
+  // Rendering without a proxy is allowed: on a host with a clean IP it is the
+  // only way to reach Google, and it is much cheaper than a tunnel.
+  if (!proxy && !allowDirect) {
     const e = new Error('no proxy');
     e.code = 'NO_PROXY';
     throw e;
