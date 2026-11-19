@@ -650,13 +650,45 @@ them only when spoofing for some other site.
 
 So `engine=google` / `chrome` normally return Google results via the browser render
 (`source: "render"`) using the free proxy pool. `google_lite` uses the plain-HTTP
-`gbv=2` path first, then Chrome fallback — **unless no residential exits are
-available**. Datacenter exits now get Google's JS shell (`enablejs`) or `/sorry` over
-plain HTTP, so without residential proxies `google_lite` skips the wasted HTTP round
-and goes straight to a parallel browser fetch (roughly half the latency). That browser
-fetch also commits the navigation and waits for the result selector instead of blocking
-on `domcontentloaded`, which Google often never fires through slow exits. Set
-`LITE_GOOGLE_HTTP=1` to force the old HTTP-first behaviour, `0` to always skip it.
+`gbv=2` path first, then Chrome fallback.
+
+### Google lite: fewer blocks, lower latency, more signal
+
+`google_lite` is the plain-HTTP Google path. It was rewritten so it stops
+wasting time and stops losing results:
+
+- **Transport ladder** — direct fetch and the proxy exits are raced in
+  parallel; the Chromium render is the last resort and is only attempted on
+  the final retry round. A blocked datacenter IP used to cost one full render
+  per page, it now costs one per request.
+- **Exit memory** — every exit is classified once (`tunnel`, `plain`, `gated`,
+  `dead`). Exits that were proven unable to tunnel or that just returned an
+  interstitial are skipped on later requests instead of being re-probed, so a
+  dead pool costs one timeout instead of one per query.
+- **Health check that matches the workload** — the proxy check now rejects
+  `407`/`403` instead of counting them as alive, and `PROXY_CHECK_TARGET`
+  validates an exit against the real target (`www.google.com:443`) rather than
+  against `example.com`.
+- **Locale correctness** — the lite URL now resolves country and language the
+  same way the render path does (`gl=uk` becomes `gl=gb`, `hl` follows the
+  country), and a single-host `site:` dork is passed through as
+  `as_sitesearch`. Before, the lite path sent `gl=uk` and never set
+  `as_sitesearch`.
+- **Full page coverage** — a short page is topped up from the next page, so
+  `num=10` returns 10 hits instead of 8. The page that worked is reused for
+  the next one, so a follow-up page costs the same as the first.
+- **Ranking** — results carry an explicit `rank`, `displayedLink` and `date`,
+  the same shape the Custom Search JSON API returns.
+
+Two Google surfaces are attached to Google results because they are **not**
+behind the JavaScript gate and therefore keep working from a datacenter IP:
+
+| Field | Source | Notes |
+|-------|--------|-------|
+| `suggestions` | `suggestqueries.google.com/complete/search` | Query completions for the same query |
+| `news` | `news.google.com/rss/search` | Recent articles, with publisher and date |
+
+The Custom Search JSON API returns neither.
 
 ### Optional: official Custom Search JSON API (most reliable)
 
@@ -676,16 +708,39 @@ the Google side. When these vars are unset the renderer uses the browser render 
 above, then falls back to DuckDuckGo/Bing via the normal `auto_fallback` chain.
 `GET /api/health` reports `features.google_cse: true|false`.
 
+#### Renderer vs. Custom Search JSON API
+
+| | Custom Search JSON API | `google_lite` / `google` / `chrome` |
+|---|---|---|
+| Free quota | 100 queries/day | No Google-side quota |
+| Results per page | 10, hard max | 10 per page, pages on demand |
+| Result ceiling | 100 results, then unreachable | Paginates past 100 |
+| Web coverage | A Programmable Search Engine only searches the sites you configure | Full web by default |
+| `date` per result | no | yes |
+| Sitelinks | no | yes |
+| Knowledge graph / answer box | no | yes |
+| People also ask / related searches | no | yes |
+| Query suggestions | no | yes (`suggestions`) |
+| News results | no | yes (`news`) |
+| API key required | yes | no |
+| Datacenter-IP friendly | yes | no — needs a residential exit, exactly like the CSE alternative it replaces |
+
 Tuning for the best-effort free-proxy path (only used when CSE is not configured):
 
 | Env | Default | Description |
 |-----|---------|-------------|
 | `LITE_GOOGLE_RACE` | `10` | Proxies raced in parallel per Google lite attempt |
-| `LITE_GOOGLE_ROUNDS` | `1` | Race rounds before falling back |
-| `LITE_GOOGLE_TIMEOUT_MS` | `3500` | Per-proxy timeout (too low kills slow-but-working exits) |
-| `LITE_GOOGLE_HTTP` | `auto` | `google_lite` plain-HTTP attempt: `auto` skips it when no residential exits, `1` forces it, `0` always skips |
-| `CHROME_FETCH_WORKERS` | `3` | Exits raced in parallel for the browser fetch (first usable page wins) |
-| `CHROME_FETCH_MS` | `12000` | Per-exit browser fetch budget; also the browser checkout timeout |
+| `LITE_GOOGLE_ROUNDS` | `3` | Retry rounds for the Google lite path. The Chromium fallback is only used on the last round, so a blocked IP costs one render instead of one per round. |
+| `LITE_GOOGLE_TIMEOUT_MS` | `3500` | Per-exit timeout (too low kills slow-but-working exits) |
+| `LITE_TOPUP` | `1` | Fetch the next page when a page returns fewer hits than requested, so `num=10` really returns 10 |
+| `LITE_TOPUP_SLACK` | `1` | Extra pages allowed while topping up |
+| `LITE_POOL_WARM_MS` | `2500` | On a cold start, how long to wait for the live proxy list before falling back to the bundled (usually dead) one |
+| `GOOGLE_ENRICH` | `1` | Attach Google Suggest and Google News to Google results |
+| `GOOGLE_SUGGEST` / `GOOGLE_NEWS` | `1` | Enable each surface separately |
+| `GOOGLE_SUGGEST_MS` / `GOOGLE_NEWS_MS` | `2500` / `4000` | Per-request timeouts |
+| `GOOGLE_SUGGEST_LIMIT` / `GOOGLE_NEWS_LIMIT` | `10` | How many items to return per surface |
+| `PROXY_CHECK_TARGET` | *(unset)* | Only keep exits that can `CONNECT` to this `host:port` (e.g. `www.google.com:443`). The default check only proves a proxy is up, not that it can reach Google. |
+| `CHROME_FETCH_WORKERS` | `2` | Exits rendered in parallel by the Chromium fallback |
 | `UA_MASK` | `1` | Native UA normalization (headless tokens stripped, real version/platform). Keep `1` for Google |
 | `UA_MASK_HEADERS` | `0` | Inject `sec-ch-ua*` headers. `1` makes Google flag the mismatch |
 | `UA_MASK_JS` | `0` | Patch `navigator`/`userAgentData` in-page. `1` makes Google flag the mismatch |

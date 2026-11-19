@@ -283,6 +283,9 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
   if (engine === 'google_lite' || engine === 'mojeek') liteOnly = true;
   if (engine === 'chrome') renderOnly = true;
 
+  // Started before the SERP request so the two run in parallel.
+  const enrich = googleEnrich(engine, query, hl, gl);
+
   const deadline = Math.min(
     Date.now() + requestTimeoutMs(),
     deadlineAt || Date.now() + requestTimeoutMs()
@@ -295,6 +298,7 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
       const cse = await googleCse.cseSearch({ query, num: cap, hl, gl, start });
       if (cse.results && cse.results.length) {
         circuit.record(engine, 'OK');
+        const enrichExtras = await attachEnrich(enrich);
         return {
           results: cse.results.slice(0, cap),
           duration_ms: cse.duration_ms,
@@ -303,7 +307,7 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
           source: 'google_cse',
           pages_fetched: Math.ceil(cse.results.length / GOOGLE_PAGE_SIZE) || 1,
           pages_requested: pageCount,
-          extras: null,
+          extras: Object.keys(enrichExtras).length ? enrichExtras : null,
         };
       }
     } catch {
@@ -319,15 +323,19 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
       const lite = await fastLiteSearch({ engine, query, num: cap, hl, gl, start, tbs, before, after });
       if (lite.results && lite.results.length) {
         circuit.record(engine, 'OK');
+        const enrichExtras = await attachEnrich(enrich);
         return {
           results: lite.results.slice(0, cap),
           duration_ms: lite.duration_ms,
           attempts: 1,
           proxy: null,
           source: 'lite',
+          transport: lite.transport || null,
           pages_fetched: 1,
           pages_requested: pageCount,
-          extras: lite.extras || null,
+          extras: Object.keys(lite.extras || {}).length || Object.keys(enrichExtras).length
+            ? { ...(lite.extras || {}), ...enrichExtras }
+            : null,
         };
       }
     } catch (err) {
@@ -528,6 +536,10 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
     throw lastErr;
   }
   circuit.record(engine, 'OK');
+  const enrichExtras = await attachEnrich(enrich);
+  const mergedExtras = Object.keys(extras || {}).length || Object.keys(enrichExtras).length
+    ? { ...(extras || {}), ...enrichExtras }
+    : null;
   return {
     results: merged.slice(0, autoPages ? Math.min(MAX_NUM, merged.length) : cap),
     duration_ms: duration,
@@ -536,7 +548,7 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
     source: 'render',
     pages_fetched: pagesFetched,
     pages_requested: pageCount,
-    extras,
+    extras: mergedExtras,
   };
 }
 
@@ -566,6 +578,44 @@ function isGoogleEngine(engine) {
   return engine === 'google' || engine === 'google_lite' || engine === 'chrome';
 }
 
+// Google Suggest and Google News are not behind the JavaScript gate, so they
+// keep working from a datacenter IP where the SERP itself is gated. The
+// Programmable Search JSON API offers neither, which makes these two surfaces
+// a concrete quality win over GOOGLE_CSE_KEY / GOOGLE_CSE_CX.
+//
+// They are started before the SERP request and awaited after it, so they never
+// add latency to a slow SERP fetch.
+function googleEnrich(engine, query, hl, gl) {
+  if (!isGoogleEngine(engine)) return null;
+  if (String(process.env.GOOGLE_ENRICH || '1') === '0') return null;
+  const suggest = require('./lib/googleSuggest');
+  const wantSuggest = String(process.env.GOOGLE_SUGGEST || '1') !== '0';
+  const wantNews = String(process.env.GOOGLE_NEWS || '1') !== '0';
+  if (!wantSuggest && !wantNews) return null;
+  const out = {};
+  if (wantSuggest) {
+    out.suggestions = suggest
+      .suggest(query, { hl, gl, limit: intEnv('GOOGLE_SUGGEST_LIMIT', 10) })
+      .catch(() => []);
+  }
+  if (wantNews) {
+    out.news = suggest.news(query, { hl, gl, limit: intEnv('GOOGLE_NEWS_LIMIT', 10) }).catch(() => []);
+  }
+  return out;
+}
+
+async function attachEnrich(enrich) {
+  if (!enrich) return {};
+  const keys = Object.keys(enrich);
+  const values = await Promise.all(keys.map((k) => enrich[k]));
+  const out = {};
+  keys.forEach((k, i) => {
+    const v = values[i];
+    if (Array.isArray(v) && v.length) out[k] = v;
+  });
+  return out;
+}
+
 function mergeUnique(lists, cap) {
   const seen = new Set();
   const out = [];
@@ -578,6 +628,12 @@ function mergeUnique(lists, cap) {
     }
   }
   return out;
+}
+
+// Ranks are per page while a response can merge several pages and several
+// engines, so they are renumbered once, at the end, to stay contiguous.
+function withRanks(results) {
+  return (results || []).map((r, i) => ({ ...r, rank: i + 1 }));
 }
 
 async function handleSearch(req, res) {
@@ -712,6 +768,7 @@ async function handleSearch(req, res) {
             : r.results;
           results = applyDomainFilters(results, resultFilters);
           if (dorkMode) results = enforceDork(results, dorkInfo);
+          results = withRanks(results);
           r.results = results;
           return { engine, ok: true, r };
         } catch (err) {
@@ -746,6 +803,8 @@ async function handleSearch(req, res) {
       if (mergeExtras.peopleAlsoAsk) body.peopleAlsoAsk = mergeExtras.peopleAlsoAsk;
       if (mergeExtras.relatedSearches) body.relatedSearches = mergeExtras.relatedSearches;
       if (mergeExtras.answerBox) body.answerBox = mergeExtras.answerBox;
+      if (mergeExtras.suggestions) body.suggestions = mergeExtras.suggestions;
+      if (mergeExtras.news) body.news = mergeExtras.news;
     }
     if (explain) {
       body.diagnostics = {
@@ -773,6 +832,8 @@ async function handleSearch(req, res) {
   const { noFallback, tryList } = resolveTryList(engineList, req.query);
   const attemptsDetail = [];
   let lastErr = new Error('no engine produced a result');
+  // Set when an engine returned hits that the dork/domain filters removed.
+  let dorkFilteredOut = false;
   const deadlineAt = Date.now() + searchBudgetMs();
   let prevEngine = null;
   for (let ei = 0; ei < tryList.length; ei += 1) {
@@ -792,12 +853,19 @@ async function handleSearch(req, res) {
     try {
       const engineQuery = dorkMode ? adaptQuery(q, engine) : q;
       const r = await searchEngine({ engine, query: engineQuery, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless, liteOnly, renderOnly, browser, deadlineAt: engineDeadline, tbs, before, after });
+      const fetched = (r.results || []).length;
       let results = shodanOptionsActive(shodanOpts)
         ? applyShodanOptions(r.results, shodanOpts)
         : r.results;
       results = applyDomainFilters(results, resultFilters);
       if (dorkMode) results = enforceDork(results, dorkInfo);
       if (wantDedupe) results = dedupeResults(results, num);
+      results = withRanks(results);
+      if (results.length === 0 && fetched > 0) {
+        // The engine did answer, every hit was dropped by the site:/filetype:
+        // filter. That is a real answer, not an unreachable engine.
+        dorkFilteredOut = true;
+      }
       if (results.length === 0) {
         attemptsDetail.push({
           engine,
@@ -829,6 +897,7 @@ async function handleSearch(req, res) {
         pages_fetched: r.pages_fetched,
         pages_requested: r.pages_requested,
         source: r.source,
+        transport: r.transport || null,
         proxy: maskProxy(r.proxy),
         browser,
         auto_fallback: !noFallback && !googleStandalone(),
@@ -840,6 +909,10 @@ async function handleSearch(req, res) {
         if (r.extras.peopleAlsoAsk) body.peopleAlsoAsk = r.extras.peopleAlsoAsk;
         if (r.extras.relatedSearches) body.relatedSearches = r.extras.relatedSearches;
         if (r.extras.answerBox) body.answerBox = r.extras.answerBox;
+        // Surfaced by the Google transport and by the Custom Search API path
+        // alike, so both engines expose the same shape.
+        if (r.extras.suggestions) body.suggestions = r.extras.suggestions;
+        if (r.extras.news) body.news = r.extras.news;
       }
       if (explain) {
         body.diagnostics = {
@@ -873,6 +946,9 @@ async function handleSearch(req, res) {
     duration_ms: Date.now() - t0,
     code: lastErr.code || 'ERROR',
   });
+  // When an engine answered but every hit was removed by the site:/filetype:
+  // filter, say so instead of claiming the engine could not be reached.
+  const filteredCode = dorkFilteredOut ? 'EMPTY_RESULTS' : publicCode(lastErr.code);
   const failed = {
     engine: requested,
     requested_engine: requested,
@@ -880,8 +956,10 @@ async function handleSearch(req, res) {
     engines_tried: tryList,
     query: q,
     success: false,
-    code: publicCode(lastErr.code),
-    error: publicMessage(requested, lastErr),
+    code: filteredCode,
+    error: dorkFilteredOut
+      ? `Search returned results, but none matched the site:/filetype: filter for "${q}".`
+      : publicMessage(requested, lastErr),
     count: 0,
     results: [],
     duration_ms: Date.now() - t0,

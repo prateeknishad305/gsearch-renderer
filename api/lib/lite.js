@@ -57,38 +57,13 @@ const ENDPOINTS = {
     if (s) p.set('page', String(Math.floor(s / 10) + 1));
     return `https://www.startpage.com/sp/search?${p.toString()}`;
   },
-  google_lite: ({ q, s, gl, hl, tbs, before, after }) => {
-    const p = new URLSearchParams({
-      q,
-      hl: hl || 'en',
-      gl: gl || 'us',
-      start: String(s || 0),
-      gbv: '2',
-    });
-    try {
-      const tbsVal = require('./googleExtract').buildTbs({ tbs, before, after });
-      if (tbsVal) p.set('tbs', tbsVal);
-    } catch {
-      /* ignore */
-    }
-    return `https://www.google.com/search?${p.toString()}`;
-  },
-  google: ({ q, s, gl, hl, tbs, before, after }) => {
-    const p = new URLSearchParams({
-      q,
-      hl: hl || 'en',
-      gl: gl || 'us',
-      start: String(s || 0),
-      gbv: '2',
-    });
-    try {
-      const tbsVal = require('./googleExtract').buildTbs({ tbs, before, after });
-      if (tbsVal) p.set('tbs', tbsVal);
-    } catch {
-      /* ignore */
-    }
-    return `https://www.google.com/search?${p.toString()}`;
-  },
+  // Google lite URLs are built by googleLite.buildLiteUrl so the plain-HTTP
+  // path resolves locale, country and site: dorks exactly like the Chromium
+  // path does.
+  google_lite: ({ q, s, num, gl, hl, tbs, before, after }) =>
+    require('./googleLite').buildLiteUrl({ q, num, start: s, gl, hl, tbs, before, after }).url,
+  google: ({ q, s, num, gl, hl, tbs, before, after }) =>
+    require('./googleLite').buildLiteUrl({ q, num, start: s, gl, hl, tbs, before, after }).url,
   archive: ({ q, s, num }) => {
     const rows = Math.min(50, Math.max(1, Number(num) || 10));
     const page = Math.floor(Math.max(0, Number(s) || 0) / 10) + 1;
@@ -439,18 +414,13 @@ function isBlockedPage(html, engine) {
   const low = raw.toLowerCase();
   const google = engine === 'google' || engine === 'google_lite';
   if (google) {
-    if (/\/sorry\//i.test(raw) || /id="captcha"/i.test(low)) return true;
-    // Google's JS-gate / SPA shell ("enablejs" redirect) contains a stray <H3>
-    // token in its template, so a single marker is not proof of real results.
-    if (/enablejs|httpservice\/retry|if you are not redirected|table,div,span,p\{display:none\}|window\.google\.c\s*=\s*window\.google\.c/i.test(raw)) {
-      return true;
-    }
-    const h3 = (raw.match(/<h3/gi) || []).length;
-    const urlq = (raw.match(/\/url\?q=/gi) || []).length;
-    const cite = (raw.match(/<cite/gi) || []).length;
-    // Real SERPs carry many anchors; require >=2 markers to reject false positives.
-    if (h3 >= 2 || urlq >= 1 || cite >= 1) return false;
-    return true;
+    // Shared with the googleLite transport so both agree on what an
+    // interstitial is: the JS gate, /sorry, captcha and consent walls.
+    const gl = require('./googleLite');
+    if (gl.isGoogleBlocked(raw)) return true;
+    // A real SERP carries result markers; without them the payload is an
+    // unrecognised block page or an empty shell.
+    return !gl.looksLikeSerp(raw);
   }
   if (/\banomaly/i.test(low)) return true;
   if (engine === 'duckduckgo' && /id="captcha"/i.test(low)) return true;
@@ -720,36 +690,44 @@ async function fetchChromeGoogle(url, engine) {
   }
   const timeoutMs = Math.max(8000, parseInt(process.env.CHROME_FETCH_MS, 10) || 12000);
   const pool = liveProxies(engine).filter(Boolean).sort(() => Math.random() - 0.5);
-  const { firstOk } = require('./proxyRace');
-  const n = Math.max(1, Math.min(6, parseInt(process.env.CHROME_FETCH_WORKERS, 10) || 3));
+  const n = Math.max(1, Math.min(2, parseInt(process.env.CHROME_FETCH_WORKERS, 10) || 1));
   const tries = pool.slice(0, n);
   if (!tries.length) {
     const e = new Error('no proxy');
     e.code = 'NO_PROXY';
     throw e;
   }
-  // Race the exits in parallel and keep the first usable page; sequential
-  // tries made one blocked exit cost a whole extra render timeout.
-  const attempt = async (proxy) => {
-    const r = await chromeFetch.fetchHtml(url, { proxy, timeoutMs, engine });
-    const loc = r && r.finalUrl;
-    if (loc && /\/sorry\//i.test(loc)) {
-      throw Object.assign(new Error('sorry'), { code: 'BLOCKED' });
+  let lastErr = null;
+  for (const proxy of tries) {
+    try {
+      const r = await chromeFetch.fetchHtml(url, { proxy, timeoutMs, engine });
+      const loc = r && r.finalUrl;
+      if (loc && /\/sorry\//i.test(loc)) {
+        lastErr = Object.assign(new Error('sorry'), { code: 'BLOCKED' });
+        continue;
+      }
+      if (r.status && r.status !== 200 && r.status !== 0 && r.status !== 302) {
+        lastErr = Object.assign(new Error(`status ${r.status}`), { code: 'LITE_HTTP_ERROR' });
+        continue;
+      }
+      let html = r && r.html;
+      if (!html || isBlockedPage(html, engine)) {
+        lastErr = Object.assign(new Error('blocked'), { code: 'BLOCKED' });
+        continue;
+      }
+      if (r.extras && html && !/<!--gsearch-extras:/.test(html)) {
+        const { extrasComment } = require('./googleExtract');
+        html += extrasComment(r.extras);
+      }
+      return { html, extras: r.extras || null, results: r.results || null };
+    } catch (err) {
+      lastErr = err;
     }
-    if (r.status && r.status !== 200 && r.status !== 0 && r.status !== 302) {
-      throw Object.assign(new Error(`status ${r.status}`), { code: 'LITE_HTTP_ERROR' });
-    }
-    let html = r && r.html;
-    if (!html || isBlockedPage(html, engine)) {
-      throw Object.assign(new Error('blocked'), { code: 'BLOCKED' });
-    }
-    if (r.extras && html && !/<!--gsearch-extras:/.test(html)) {
-      const { extrasComment } = require('./googleExtract');
-      html += extrasComment(r.extras);
-    }
-    return { html, extras: r.extras || null, results: r.results || null };
-  };
-  return firstOk(tries.map((proxy) => () => attempt(proxy)));
+  }
+  if (lastErr) throw lastErr;
+  const e = new Error('chrome fetch empty');
+  e.code = 'LITE_EMPTY';
+  throw e;
 }
 
 async function fetchLitePage(url, engine) {
@@ -759,23 +737,6 @@ async function fetchLitePage(url, engine) {
     accept: JSON_ENGINES.has(engine) ? 'application/json' : 'text/html,application/xhtml+xml',
   };
   if (engine === 'google' || engine === 'google_lite') {
-    // Datacenter exits no longer receive Google's basic HTML over plain HTTP:
-    // they get the JS shell (enablejs) or /sorry, so the HTTP race only burns
-    // time before the browser fallback. Unless residential exits are present,
-    // go straight to the browser fetch. LITE_GOOGLE_HTTP=1 forces the old path.
-    if (engine === 'google_lite') {
-      const httpMode = String(process.env.LITE_GOOGLE_HTTP || 'auto').toLowerCase();
-      let skipHttp = false;
-      try {
-        if (httpMode !== '1' && require('./chromeFetch').fetchOn()) {
-          const { partitionPool } = require('./proxyPool');
-          skipHttp = httpMode === '0' || partitionPool(liveProxies(engine)).residential.length === 0;
-        }
-      } catch {
-        skipHttp = false;
-      }
-      if (skipHttp) return fetchChromeGoogle(url, engine);
-    }
     const rounds = Math.max(1, Math.min(4, parseInt(process.env.LITE_GOOGLE_ROUNDS, 10) || 1));
     const raceW = Math.max(1, Math.min(24, parseInt(process.env.LITE_GOOGLE_RACE, 10) || 10));
     const timeoutMs = Math.max(1200, Math.min(15000, parseInt(process.env.LITE_GOOGLE_TIMEOUT_MS, 10) || 3500));
@@ -825,12 +786,140 @@ async function fetchLitePage(url, engine) {
   }
 }
 
-async function fastLiteSearch({ engine, query, num = 10, hl = 'en', gl = 'us', start = 0, tbs, before, after }) {
+// Exits for the Google transport. The live pool is refreshed in the
+// background; exits that were proven unable to tunnel are skipped so a request
+// never pays the same timeout twice for the same dead exit.
+async function googleExits() {
+  try {
+    const { getShardPool, googleProxyPool, getUserProxies } = require('./proxyPool');
+    const { getLivePool, refreshLivePool } = require('./proxyFetch');
+    const exitState = require('./exitState');
+    const user = getUserProxies().filter(Boolean);
+    if (user.length) return user.filter((p) => exitState.canUse(p));
+    let live = getLivePool();
+    if (!live.length) {
+      // Warm the pool once. On a cold start the live list is still downloading
+      // and every exit we could race would come from the dead fallback file,
+      // which is exactly how a request ends up "blocked" for no reason.
+      const budget = Math.max(0, parseInt(process.env.LITE_POOL_WARM_MS, 10) || 2500);
+      if (budget > 0) {
+        try {
+          await Promise.race([
+            refreshLivePool(),
+            new Promise((r) => setTimeout(r, budget)),
+          ]);
+        } catch {
+          /* ignore */
+        }
+      }
+      live = getLivePool();
+    }
+    const pool = live.length ? live : googleProxyPool(getShardPool());
+    return pool.filter(Boolean).filter((p) => exitState.canUse(p));
+  } catch {
+    return [];
+  }
+}
+
+// Google lite search: geo-correct URL, hardened transport, and a page loop
+// that tops up short pages so a request for N results actually returns N.
+async function googleLiteSearch({ engine, query, num, hl, gl, start, tbs, before, after, deadlineAt }) {
+  const googleLite = require('./googleLite');
+  const { parseExtras } = require('./googleExtract');
+  const t0 = Date.now();
+  const want = Math.max(1, Number(num) || 10);
+  const base = Math.max(0, Number(start) || 0);
+  const results = [];
+  const seen = new Set();
+  let extras = null;
+  let lastErr = null;
+  let transport = null;
+  const topUp = String(process.env.LITE_TOPUP || '1') !== '0';
+  const slack = topUp ? Math.max(0, parseInt(process.env.LITE_TOPUP_SLACK, 10) || 1) : 0;
+  const maxPages = Math.min(10, Math.ceil(want / 10) + slack);
+  const timeoutMs = Math.max(1200, Math.min(15000, parseInt(process.env.LITE_GOOGLE_TIMEOUT_MS, 10) || 3500));
+  const rounds = Math.max(1, Math.min(4, parseInt(process.env.LITE_GOOGLE_ROUNDS, 10) || 3));
+  const proxies = await googleExits();
+  const parser = PARSERS[engine] || PARSERS.google;
+
+  for (let page = 0; page < maxPages; page += 1) {
+    if (results.length >= want) break;
+    if (deadlineAt && Date.now() + 800 > deadlineAt) break;
+    const { url, geo } = googleLite.buildLiteUrl({
+      q: query,
+      num: Math.min(10, want - results.length),
+      start: base + page * 10,
+      hl,
+      gl,
+      tbs,
+      before,
+      after,
+    });
+    let pack = null;
+    let err = null;
+    for (let round = 0; round < rounds; round += 1) {
+      const lastRound = round === rounds - 1;
+      try {
+        pack = await googleLite.fetchGoogleLite({
+          url,
+          geo,
+          proxies,
+          timeoutMs,
+          // Chromium is by far the most expensive transport, so it is only used
+          // once the cheap ones have used up their rounds. Without this a
+          // single query could spend 12s per page inside the renderer.
+          allowChrome: lastRound,
+          // Reuse whatever worked for the previous page.
+          prefer: transport,
+        });
+        break;
+      } catch (caught) {
+        err = caught;
+      }
+    }
+    if (!pack) {
+      lastErr = err;
+      break;
+    }
+    transport = pack.transport || transport;
+    if (!extras) extras = pack.extras || parseExtras(pack.html);
+    let added = 0;
+    for (const r of parser(pack.html)) {
+      if (!r || !r.url || seen.has(r.url)) continue;
+      seen.add(r.url);
+      results.push(r);
+      added += 1;
+      if (results.length >= want) break;
+    }
+    // Nothing new on this page means the next one will not help either.
+    if (added === 0) break;
+  }
+
+  if (results.length === 0) {
+    if (lastErr) throw lastErr;
+    const e = new Error(`Engine "${engine}" returned no organic results on plain-HTTP page`);
+    e.code = 'EMPTY_RESULTS';
+    throw e;
+  }
+
+  return {
+    results: results.slice(0, want),
+    duration_ms: Date.now() - t0,
+    extras,
+    transport,
+  };
+}
+
+async function fastLiteSearch({ engine, query, num = 10, hl = 'en', gl = 'us', start = 0, tbs, before, after, deadlineAt }) {
   const build = ENDPOINTS[engine];
   if (!build) {
     const e = new Error(`No lite endpoint for engine "${engine}"`);
     e.code = 'NO_LITE_ENDPOINT';
     throw e;
+  }
+  const google = engine === 'google' || engine === 'google_lite';
+  if (google) {
+    return googleLiteSearch({ engine, query, num, hl, gl, start, tbs, before, after, deadlineAt });
   }
   const kl = `${gl || 'us'}-${hl || 'en'}`;
   const parser = PARSERS[engine];
@@ -841,7 +930,6 @@ async function fastLiteSearch({ engine, query, num = 10, hl = 'en', gl = 'us', s
   let extras = null;
   let lastErr = null;
   const base = Math.max(0, Number(start) || 0);
-  const google = engine === 'google' || engine === 'google_lite';
 
   for (let i = 0; i < pageCount; i++) {
     if (results.length >= num) break;

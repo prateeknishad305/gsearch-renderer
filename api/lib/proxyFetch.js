@@ -36,7 +36,7 @@ function proxyAuthHeader(u) {
   return `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
 }
 
-function checkConnect(proxy, timeoutMs) {
+function checkConnect(proxy, timeoutMs, host) {
   return new Promise((resolve) => {
     let u;
     try {
@@ -49,7 +49,7 @@ function checkConnect(proxy, timeoutMs) {
       host: u.hostname,
       port: Number(u.port) || 80,
       method: 'CONNECT',
-      path: 'example.com:443',
+      path: String(host || 'example.com:443'),
       timeout: timeoutMs,
       headers: (() => {
         const auth = proxyAuthHeader(u);
@@ -96,7 +96,10 @@ function checkHttpGet(proxy, timeoutMs) {
     };
     req.on('response', (res) => {
       res.resume();
-      done(res.statusCode >= 200 && res.statusCode < 500);
+      // 407 (auth rejected), 403 and 404 mean the exit can never serve a
+      // request. Counting them as alive used to fill the pool with exits that
+      // failed on every single use.
+      done(res.statusCode >= 200 && res.statusCode < 400);
     });
     req.on('timeout', () => done(false));
     req.on('error', () => done(false));
@@ -104,10 +107,31 @@ function checkHttpGet(proxy, timeoutMs) {
   });
 }
 
-async function checkProxy(proxy, timeoutMs) {
+// Probes one exit and remembers what it can actually do:
+//   'tunnel' - CONNECT works, it can reach https targets
+//   'plain'  - only absolute-URI plain HTTP works
+//   'dead'   - it does not work at all
+//
+// The distinction matters: google.com only serves results over https, so an
+// exit that cannot tunnel is useless for Google no matter how healthy it looks.
+async function checkProxy(proxy, timeoutMs, opts = {}) {
   const t = timeoutMs || intEnv('PROXY_CHECK_MS', 4000);
-  if (await checkConnect(proxy, t)) return true;
-  return checkHttpGet(proxy, t);
+  const exitState = require('./exitState');
+  const target = String(opts.target || '').trim();
+  if (await checkConnect(proxy, t, target || undefined)) {
+    exitState.note(proxy, 'tunnel');
+    return true;
+  }
+  const plainOk = await checkHttpGet(proxy, t);
+  exitState.note(proxy, plainOk ? 'plain' : 'dead');
+  return plainOk;
+}
+
+// Optional: only keep exits that can tunnel to the real target. This is the
+// only check that separates "the proxy is up" from "the proxy can reach
+// Google". Set to e.g. "www.google.com:443".
+function checkTarget() {
+  return String(process.env.PROXY_CHECK_TARGET || '').trim();
 }
 
 async function mapLimit(items, limit, fn) {
@@ -169,6 +193,7 @@ async function refreshLivePool(force) {
       const want = Math.min(checkMax, intEnv('PROXY_LIVE_MIN', 8));
       const concurrency = intEnv('PROXY_CHECK_CONCURRENCY', 8);
       const timeoutMs = intEnv('PROXY_CHECK_MS', 4000);
+      const target = checkTarget();
       const candidates = all.slice(0, checkMax);
       const alive = [];
       let checked = 0;
@@ -176,7 +201,7 @@ async function refreshLivePool(force) {
       await mapLimit(candidates, concurrency, async (proxy) => {
         if (alive.length >= want) return;
         checked += 1;
-        if (await checkProxy(proxy, timeoutMs)) alive.push(proxy);
+        if (await checkProxy(proxy, timeoutMs, { target })) alive.push(proxy);
       });
 
       state.checked = checked;
@@ -242,6 +267,7 @@ function fetcherInfo() {
 module.exports = {
   PROXY_FETCH_URL,
   checkProxy,
+  checkTarget,
   downloadList,
   refreshLivePool,
   startProxyFetcher,

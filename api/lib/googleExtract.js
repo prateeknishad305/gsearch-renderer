@@ -229,6 +229,9 @@ function extractFromHtml(html) {
     if (dt && dt.length > 2 && dt.length < 40) item.date = dt;
     const sl = sitelinksFrom(slHtml);
     if (sl.length) item.sitelinks = sl;
+    // Explicit rank: the Custom Search JSON API returns an ordered item list,
+    // so callers should not have to infer position from array order.
+    item.rank = results.length + 1;
     results.push(item);
   }
   const blockRe =
@@ -477,11 +480,47 @@ function pagePack() {
     return best;
   }
 
-  function snippetOf(container) {
-    if (!container) return '';
-    const s = container.querySelector(
+  function snippetElOf(el) {
+    if (!el || !el.querySelector) return null;
+    return el.querySelector(
       'div.VwiC3b, span.aCOpRe, div.IsZvec, span.st, div[data-sncf], div[data-content-feature="1"]'
     );
+  }
+
+  // Google moved the snippet out of the title block: the heading sits in one
+  // grid cell and the snippet in a sibling one. Looking only at the closest
+  // "div.g" therefore loses the snippet, so walk up until the container also
+  // holds one - but stop as soon as the container turns into a list of several
+  // results, otherwise the snippet of a neighbouring result gets picked up.
+  function cardOf(h) {
+    let el = h.parentElement;
+    let fallback = null;
+    for (let i = 0; i < 10 && el && el !== document.body; i += 1) {
+      fallback = el;
+      const heads = el.querySelectorAll ? el.querySelectorAll('h3').length : 0;
+      if (heads > 2) return fallback;
+      if (snippetElOf(el)) return el;
+      el = el.parentElement;
+    }
+    return fallback || h.parentElement;
+  }
+
+  // The container can hold the blocks of more than one result, so take the
+  // snippet that follows the heading closest to it.
+  function nearestSnippet(container, h) {
+    const all = container.querySelectorAll(
+      'div.VwiC3b, span.aCOpRe, div.IsZvec, span.st, div[data-sncf], div[data-content-feature="1"]'
+    );
+    for (const el of all) {
+      if (el === h) continue;
+      if (h.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING) return el;
+    }
+    return all[0] || null;
+  }
+
+  function snippetOf(container, heading) {
+    if (!container) return '';
+    const s = heading ? nearestSnippet(container, heading) : snippetElOf(container);
     if (!s) return '';
     const t = (s.textContent || '').replace(/\s+/g, ' ').trim();
     return t.length > 12 ? t.slice(0, 400) : '';
@@ -516,12 +555,19 @@ function pagePack() {
     const title = (h.textContent || '').replace(/\s+/g, ' ').trim();
     if (!title || title.length < 3 || title.length > 200) continue;
     if (NAV.has(title.toLowerCase()) || AI_PREFIX.test(title)) continue;
-    if (h.closest('.HiHjCd, .St0YAf, div.O1MEtf, .related-question-pair, nav, header')) continue;
-    const wrap = h.closest('div.g, div.MjjYud, div[data-sokoban-container]') || h.closest('div.yuRUbf') || h.parentElement;
-    const citeEl = wrap && wrap.querySelector('cite, span.qLRx3b, cite.tjvcx, span.ylcaW');
+    // Some cards use the destination URL as the heading. That is never a
+    // useful title and it breaks the result.
+    if (/^https?:\/\//i.test(title)) continue;
+    if (h.closest('.HiHjCd, .St0YAf, div.O1MEtf, .related-question-pair, nav, header, div.OSJXUb, div[jsname="Cpkphb"]')) continue;
+    const card = cardOf(h);
+    const wrap = h.closest('div.g, div.MjjYud, div[data-sokoban-container]') || card;
+    const citeEl =
+      (wrap && wrap.querySelector('cite, span.qLRx3b, cite.tjvcx, span.ylcaW')) ||
+      (card && card.querySelector('cite, span.qLRx3b, cite.tjvcx, span.ylcaW'));
     const a =
       h.closest('a[href]') ||
-      (wrap && wrap.querySelector('div.yuRUbf > a[href], a[jsname="UWckNb"], a[jsname][href], a[data-ved][href]'));
+      (wrap && wrap.querySelector('div.yuRUbf > a[href], a[jsname="UWckNb"], a[jsname][href], a[data-ved][href]')) ||
+      (card && card.querySelector('div.yuRUbf > a[href], a[jsname="UWckNb"], a[jsname][href], a[data-ved][href]'));
     const href = a ? a.getAttribute('href') || '' : '';
     const ping = a ? a.getAttribute('ping') || '' : '';
     const dataHref = a
@@ -533,15 +579,27 @@ function pagePack() {
     url = expandIndexOf(url, title) || url;
     if (!url || seen.has(url)) continue;
     seen.add(url);
-    const card = h.closest('div.g, div.MjjYud') || wrap;
-    const item = { title, url, snippet: snippetOf(card) || snippetOf(wrap) };
+    const item = { title, url, snippet: snippetOf(card, h) };
     if (displayedLink) item.displayedLink = displayedLink;
     const dt = dateOf(card) || dateOf(wrap);
     if (dt) item.date = dt;
     const sl = sitelinksOf(card);
     if (sl.length) item.sitelinks = sl;
+    // A card that carries a snippet or a source line is an organic hit. Cards
+    // without either are usually sitelinks or AI-mode chrome.
+    item.organic = Boolean(item.snippet || displayedLink);
     results.push(item);
   }
+
+  // Keep only the organic cards when there are clearly enough of them,
+  // otherwise keep everything so a page without snippets does not come back
+  // empty.
+  const organic = results.filter((r) => r.organic);
+  const kept = organic.length >= 5 ? organic : results;
+  kept.forEach((r, i) => {
+    delete r.organic;
+    r.rank = i + 1;
+  });
 
   const extras = {};
   const kg = {};
@@ -604,7 +662,7 @@ function pagePack() {
   });
   if (related.length) extras.relatedSearches = related.slice(0, 12);
 
-  return { results, extras: Object.keys(extras).length ? extras : null };
+  return { results: kept, extras: Object.keys(extras).length ? extras : null };
 }
 
 function formatTbsDate(raw) {

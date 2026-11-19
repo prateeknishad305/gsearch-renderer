@@ -101,10 +101,7 @@ async function runSearch(page, site, url, timeout) {
     if (t === 'image' || t === 'media' || t === 'font') return route.abort();
     return route.continue();
   }).catch(() => {});
-  // Commit the navigation and wait for results instead of blocking on
-  // domcontentloaded, which Google frequently never fires through slow proxies.
-  const waitUntil = site === 'google' ? 'commit' : 'domcontentloaded';
-  const resp = await page.goto(url, { waitUntil, timeout });
+  const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout });
   const ready = site === 'mojeek' ? 'ul.results-standard li a.ob, ul.results-standard li h2 a' : 'h3, cite';
   await page.waitForSelector(ready, { timeout: Math.min(8000, timeout) }).catch(() => {});
   const status = (resp && resp.status()) || 0;
@@ -165,13 +162,15 @@ function hasHits(html, engine) {
   return /<h3/i.test(html) || /<cite/i.test(html);
 }
 
-async function fetchHtml(url, { proxy, timeoutMs, engine } = {}) {
+async function fetchHtml(url, { proxy, timeoutMs, engine, allowDirect = true } = {}) {
   if (!fetchOn()) {
     const e = new Error('chrome fetch off');
     e.code = 'SKIP';
     throw e;
   }
-  if (!proxy) {
+  // Rendering without a proxy is allowed: on a host with a clean IP it is the
+  // only way to reach Google, and it is much cheaper than a tunnel.
+  if (!proxy && !allowDirect) {
     const e = new Error('no proxy');
     e.code = 'NO_PROXY';
     throw e;

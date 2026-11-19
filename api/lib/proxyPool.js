@@ -32,26 +32,26 @@ function toChromiumProxy(proxy) {
   }
 }
 
+// The scheme is kept as parsed. Converting an authenticated SOCKS5 entry to
+// http:// here loses the scheme before anything can decide how to use it;
+// Chromium cannot do SOCKS5 with credentials, but that decision belongs at
+// the Chromium boundary (toChromiumProxy), not in the pool.
 function normalizeProxy(s) {
   let line = String(s || '').trim();
   if (!line || line.startsWith('#')) return null;
   line = line.replace(/^proxy:/i, '');
   const schemeColon = line.match(/^(https?|socks5h?|socks4a?):\/\/([^/@:\s]+):(\d+):([^:\s]+):(.+)$/i);
   if (schemeColon) {
-    return toChromiumProxy(
-      `${schemeColon[1].toLowerCase()}://${encodeURIComponent(schemeColon[4])}:${encodeURIComponent(schemeColon[5])}@${schemeColon[2]}:${schemeColon[3]}`
-    );
+    return `${schemeColon[1].toLowerCase()}://${encodeURIComponent(schemeColon[4])}:${encodeURIComponent(schemeColon[5])}@${schemeColon[2]}:${schemeColon[3]}`;
   }
-  if (/^(https?|socks5h?|socks4a?):\/\//i.test(line)) return toChromiumProxy(line);
+  if (/^(https?|socks5h?|socks4a?):\/\//i.test(line)) return stripSlash(line);
   const userAt = line.match(/^([^/@\s]+):([^@/\s]+)@([^/@:\s]+):(\d+)$/);
   if (userAt) {
     return `http://${encodeURIComponent(userAt[1])}:${encodeURIComponent(userAt[2])}@${userAt[3]}:${userAt[4]}`;
   }
   const ipAt = line.match(/^([^/@:\s]+):(\d+)@([^/@\s]+):(.+)$/);
   if (ipAt) {
-    return toChromiumProxy(
-      `${schemeForPort(ipAt[2])}://${encodeURIComponent(ipAt[3])}:${encodeURIComponent(ipAt[4])}@${ipAt[1]}:${ipAt[2]}`
-    );
+    return `${schemeForPort(ipAt[2])}://${encodeURIComponent(ipAt[3])}:${encodeURIComponent(ipAt[4])}@${ipAt[1]}:${ipAt[2]}`;
   }
   if (/^[^/@:\s]+:\d+$/.test(line)) {
     const port = line.slice(line.lastIndexOf(':') + 1);
@@ -59,9 +59,7 @@ function normalizeProxy(s) {
   }
   const m = line.match(/^([^/@:\s]+):(\d+):([^:\s]+):(.+)$/);
   if (!m) return null;
-  return toChromiumProxy(
-    `${schemeForPort(m[2])}://${encodeURIComponent(m[3])}:${encodeURIComponent(m[4])}@${m[1]}:${m[2]}`
-  );
+  return `${schemeForPort(m[2])}://${encodeURIComponent(m[3])}:${encodeURIComponent(m[4])}@${m[1]}:${m[2]}`;
 }
 
 function altProxy(proxy) {
