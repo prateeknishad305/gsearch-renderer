@@ -121,6 +121,24 @@ function adaptQuery(query, engine) {
   return q.replace(/\s+/g, ' ').trim();
 }
 
+// Google honours its advanced-search parameters (as_sitesearch/as_filetype)
+// even when it drops the matching operator from q on automated traffic, so
+// callers move the operator into a parameter and strip it from the query.
+const STRIP_PATTERNS = {
+  site: /\bsite:\s*("[^"]+"|[^\s]+)/gi,
+  filetype: /\b(?:filetype|ext|mime):\s*("[^"]+"|[^\s]+)/gi,
+};
+
+function stripOperator(query, key) {
+  const re = STRIP_PATTERNS[key];
+  if (!re) return String(query || '');
+  re.lastIndex = 0;
+  return String(query || '')
+    .replace(re, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 const TRACKING_PARAM = /^(?:utm_[a-z0-9_]+|gclid|dclid|fbclid|yclid|msclkid|igshid|mc_cid|mc_eid|ref|ref_src|source|ved|usg|sa|sxsrf|ei|gs_lcp|sourceid|ie|oe)$/i;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -222,6 +240,7 @@ module.exports = {
   parseDork,
   engineSupport,
   adaptQuery,
+  stripOperator,
   canonicalUrl,
   dedupeResults,
   enforceDork,

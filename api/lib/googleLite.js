@@ -26,7 +26,7 @@ const { URL } = require('url');
 const g = require('./google');
 const exitState = require('./exitState');
 const { buildTbs } = require('./googleExtract');
-const { parseDork, isHostSiteTarget } = require('./dork');
+const { parseDork, isHostSiteTarget, stripOperator } = require('./dork');
 
 const CHROME_MAJOR = '155';
 const UA =
@@ -59,9 +59,8 @@ function boolEnv(name, dflt) {
 // plain-HTTP path and the Chromium path target exactly the same SERP.
 function buildLiteUrl({ q, num = 10, start = 0, hl, gl, tbs, before, after, proxy } = {}) {
   const geo = g.resolveGeo({ gl, hl, proxy });
-  const query = g.normalizeQuery(q);
+  let query = g.normalizeQuery(q);
   const p = new URLSearchParams();
-  p.set('q', query);
   p.set('hl', geo.hl);
   p.set('gl', geo.gl);
   p.set('start', String(Math.max(0, Number(start) || 0)));
@@ -72,8 +71,25 @@ function buildLiteUrl({ q, num = 10, start = 0, hl, gl, tbs, before, after, prox
   // Google ignores num=10 and the parameter itself is a fingerprint, so it is
   // only sent when it actually changes the page size.
   if (n !== 10) p.set('num', String(n));
-  const targets = parseDork(query).site_targets.filter(isHostSiteTarget);
-  if (targets.length === 1) p.set('as_sitesearch', targets[0]);
+  // On automated traffic Google drops site:/filetype: from q but still honours
+  // its advanced-search parameters, so send the operator as a parameter and
+  // strip it from q instead of leaving the two to contradict each other.
+  const dork = parseDork(query);
+  const targets = dork.site_targets.filter(isHostSiteTarget);
+  if (targets.length === 1) {
+    query = stripOperator(query, 'site');
+    p.set('as_sitesearch', targets[0]);
+  }
+  const filetypes = []
+    .concat(dork.operators.filetype || [])
+    .concat(dork.operators.ext || [])
+    .concat(dork.operators.mime || [])
+    .filter(Boolean);
+  if (filetypes.length === 1) {
+    query = stripOperator(query, 'filetype');
+    p.set('as_filetype', String(filetypes[0]).replace(/^\./, '').toLowerCase());
+  }
+  p.set('q', query);
   const tbsVal = buildTbs({ tbs, before, after });
   if (tbsVal) p.set('tbs', tbsVal);
   return { url: `https://${geo.host}/search?${p.toString()}`, geo };

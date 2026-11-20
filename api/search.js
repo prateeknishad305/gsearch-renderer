@@ -145,12 +145,27 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Caps a transport that has no internal deadline of its own. Without this a
+// slow Google attempt can consume the whole request budget and starve the
+// fallback engines, so a dork that Google soft-blocks never reaches Bing/DDG.
+function withDeadline(promise, ms, code) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const e = new Error(code || 'deadline exceeded');
+      e.code = code || 'TIMEOUT';
+      reject(e);
+    }, Math.max(1, ms));
+    if (timer.unref) timer.unref();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 function withGoogleLiteFallback(list) {
-  const out = list.slice();
-  if (!out.includes('google_lite') || out.includes('chrome')) return out;
-  const i = out.indexOf('google_lite');
-  out.splice(i + 1, 0, 'chrome');
-  return out;
+  // google_lite already renders with Chromium internally when the HTTP exits
+  // fail, so a separate chrome attempt only duplicates the slowest path and
+  // burns the request budget before the external engines get a turn.
+  return list.slice();
 }
 
 function withFallbacks(list) {
@@ -290,6 +305,7 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
     Date.now() + requestTimeoutMs(),
     deadlineAt || Date.now() + requestTimeoutMs()
   );
+  const dorkQuery = parseDork(query).has_operators;
 
   // Official Google Custom Search JSON API: datacenter-friendly, no proxies.
   // Used as the primary Google path when GOOGLE_CSE_KEY + GOOGLE_CSE_CX are set.
@@ -320,7 +336,11 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
   if (tryLite && Date.now() + 2500 < deadline) {
     liteAttempted = true;
     try {
-      const lite = await fastLiteSearch({ engine, query, num: cap, hl, gl, start, tbs, before, after });
+      const litePromise = fastLiteSearch({ engine, query, num: cap, hl, gl, start, tbs, before, after });
+      // Operator queries are soft-blocked by Google far more often, so they
+      // get a shorter slice of the budget and hand the rest to DDG/Bing.
+      const liteBudget = Math.max(2500, Math.min(dorkQuery ? 9000 : Infinity, deadline - Date.now()));
+      const lite = await withDeadline(litePromise, liteBudget, 'TIMEOUT');
       if (lite.results && lite.results.length) {
         circuit.record(engine, 'OK');
         const enrichExtras = await attachEnrich(enrich);
@@ -848,7 +868,7 @@ async function handleSearch(req, res) {
     // Reserve ~8s per remaining fallback engine so a slow first engine (Google
     // on datacenter IPs) cannot consume the whole budget and starve the chain.
     const remaining = tryList.length - ei - 1;
-    const reserve = remaining > 0 ? Math.min(remaining * 8000, Math.max(0, deadlineAt - startedAt - 4000)) : 0;
+    const reserve = remaining > 0 ? Math.min(remaining * 4000, Math.max(0, deadlineAt - startedAt - 4000)) : 0;
     const engineDeadline = Math.min(deadlineAt, startedAt + Math.max(4000, deadlineAt - startedAt - reserve));
     try {
       const engineQuery = dorkMode ? adaptQuery(q, engine) : q;
@@ -946,9 +966,11 @@ async function handleSearch(req, res) {
     duration_ms: Date.now() - t0,
     code: lastErr.code || 'ERROR',
   });
-  // When an engine answered but every hit was removed by the site:/filetype:
-  // filter, say so instead of claiming the engine could not be reached.
+  // When an engine answered but every hit was removed by the dork filter, say
+  // so instead of claiming the engine could not be reached.
   const filteredCode = dorkFilteredOut ? 'EMPTY_RESULTS' : publicCode(lastErr.code);
+  const dorkOps = Object.keys(dorkInfo.operators || {});
+  const filterLabel = dorkOps.length ? dorkOps.map((k) => `${k}:`).join('/') : 'dork';
   const failed = {
     engine: requested,
     requested_engine: requested,
@@ -958,7 +980,7 @@ async function handleSearch(req, res) {
     success: false,
     code: filteredCode,
     error: dorkFilteredOut
-      ? `Search returned results, but none matched the site:/filetype: filter for "${q}".`
+      ? `Search returned results, but none matched the ${filterLabel} filter for "${q}".`
       : publicMessage(requested, lastErr),
     count: 0,
     results: [],
