@@ -1,5 +1,17 @@
 # gsearch-renderer
 
+[![GitHub stars](https://img.shields.io/github/stars/prateeknishad305/gsearch-renderer?style=for-the-badge&logo=github&label=Stars)](https://github.com/prateeknishad305/gsearch-renderer/stargazers)
+[![GitHub forks](https://img.shields.io/github/forks/prateeknishad305/gsearch-renderer?style=for-the-badge&logo=github&label=Forks)](https://github.com/prateeknishad305/gsearch-renderer/network/members)
+[![GitHub issues](https://img.shields.io/github/issues/prateeknishad305/gsearch-renderer?style=for-the-badge&logo=github&label=Issues)](https://github.com/prateeknishad305/gsearch-renderer/issues)
+[![Node](https://img.shields.io/badge/node-%3E%3D20-339933?style=for-the-badge&logo=node.js&logoColor=white)](https://nodejs.org)
+[![License](https://img.shields.io/badge/license-MIT-blue?style=for-the-badge)](https://github.com/prateeknishad305/gsearch-renderer)
+
+**The best Google API alternative for developers who need real Google results without SerpAPI pricing.** Free Google SERP API, Google AI Mode and AI Overview aware, 20+ search engines, self-hosted, MIT licensed.
+
+### Search tags
+
+> best google api · google search api · free google search api · google serp api · serpapi alternative · serper alternative · google ai mode api · google ai overview api · ai search api · google dorking api · osint search api · seo rank checker api · headless chromium serp · playwright google scraper · search engine results api · google scraper api · bing api · duckduckgo api · self-hosted search api
+
 Headless Chromium SERP renderer for [gsearch-api](https://github.com/prateeknishad305/gsearch-api).
 
 Host this anywhere: **Vercel, Railway, Render, Docker, a VPS (tmux or systemd), a Windows RDP server (24/7), or your laptop**. Same HTTP API on every platform (`GET /api/search`, `POST /api/batch`, `GET /api/crawl`, `GET|POST|DELETE /api/proxies`, `GET /api/engines`, `GET /api/stats`, `GET /api/health`).
@@ -9,6 +21,25 @@ Chromium is auto-detected: `@sparticuz/chromium` on Vercel serverless, system Ch
 ## Why
 
 gsearch-api scrapes search engines with plain HTTP. Some engines (Google, DuckDuckGo, Brave, Startpage, Qwant) return a JS-required gate, consent page, or challenge to datacenter/cloud IPs like Vercel's. This service renders those pages in a real headless Chromium, executes the JavaScript, and returns parsed results in the same shape gsearch-api expects.
+
+## AI Mode and AI Overview
+
+Google now answers many queries with AI Mode and AI Overview blocks above the organic
+links. gsearch-renderer understands those SERPs: it strips the AI Mode / AI Overview
+chrome by default (`FILTER_AI_MODE=1`) so `results` stays clean, and keeps it when you
+set `FILTER_AI_MODE=0`. If you are looking for a free, self-hosted Google AI Mode API
+or Google AI Overview API instead of a paid AI search API, this is the endpoint to run.
+
+```bash
+# Clean organic results (AI Mode chrome removed)
+curl "http://localhost:3000/api/search?q=best+google+api&engine=google"
+
+# Keep AI Mode / AI Overview entries in the parsed output
+FILTER_AI_MODE=0 node server.js
+```
+
+The same toggle applies to `google`, `google_lite`, and `chrome`, so AI Mode behaviour
+is identical on every Google path.
 
 ## Endpoints
 
@@ -813,3 +844,27 @@ Examples: `https://<service>.up.railway.app`, `https://<service>.onrender.com`, 
 
 When set, gsearch-api automatically retries any engine that fails its native
 scrape (blocked / rate-limited / empty) through this renderer service.
+
+## Star it, break it, report it
+
+This project grows when developers find it. If gsearch-renderer saved you a SerpAPI,
+Serper, or ScrapingBee bill, help the next developer find it too:
+
+- Star the repo: https://github.com/prateeknishad305/gsearch-renderer
+- Share it with one person who scrapes Google
+- Open an issue for every broken engine, block page, or wrong result:
+  https://github.com/prateeknishad305/gsearch-renderer/issues
+- Put the engine, the exact query, and the output of `?explain=1` in the issue so
+  the fix ships in one pass
+- Send a PR: every engine fix pushes the repo higher in search and helps everyone
+
+Popular issues get pinned and fixed first. When Google changes its markup, an issue
+with a sample SERP is the fastest way to get that engine working again.
+
+### Popular searches that lead here
+
+`best google api` · `free google search api` · `google serp api without serpapi` ·
+`serper alternative` · `google ai mode api` · `google ai overview api` ·
+`google dorking api` · `osint google search api` · `self hosted serp api` ·
+`google search api no api key` · `google scraper api nodejs` ·
+`bing duckduckgo brave search api` · `headless chromium google search`
