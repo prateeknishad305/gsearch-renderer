@@ -864,9 +864,10 @@ async function googleLiteSearch({ engine, query, num, hl, gl, start, tbs, before
   const seen = new Set();
   const dorkInfo = parseDork(String(query || ''));
   const siteTargets = dorkInfo.site_targets.filter(isHostSiteTarget);
-  // A dork needs Google's modern surface: the basic-HTML surface that the
-  // plain-HTTP path fetches does not honour site:, filetype: and friends, so
-  // a dork fetched that way comes back unrestricted.
+  // A dork is answered through Google's modern surface: the basic-HTML
+  // surface is tried first because it is cheap, but the operator travels as
+  // as_sitesearch/as_filetype and every hit is checked, so a surface that
+  // ignores the operator is detected and escalated.
   const dork = dorkInfo.has_operators;
   const triedExits = new Set();
   let extras = null;
@@ -879,9 +880,9 @@ async function googleLiteSearch({ engine, query, num, hl, gl, start, tbs, before
   const rounds = Math.max(1, Math.min(4, parseInt(process.env.LITE_GOOGLE_ROUNDS, 10) || 3));
   const proxies = await googleExits();
   const parser = PARSERS[engine] || PARSERS.google;
-  // When the plain-HTTP path cannot serve this query (no residential exit, or
-  // a dork that the basic-HTML surface does not honour), the browser is not
-  // the last resort but the only option, so it is allowed straight away.
+  // When the plain-HTTP path cannot serve this query (no residential exit),
+  // the browser is not the last resort but the only option, so it is allowed
+  // straight away.
   const httpUseful = googleLite.httpIsUseful(proxies, dork);
 
   for (let page = 0; page < maxPages; page += 1) {
@@ -890,6 +891,12 @@ async function googleLiteSearch({ engine, query, num, hl, gl, start, tbs, before
     let pack = null;
     let err = null;
     let exhausted = false;
+    let added = 0;
+    // A dork starts on the cheap surface, where the operator travels as
+    // as_sitesearch/as_filetype. When that surface does not honour it, the
+    // next round asks for the modern surface, and the round after that for a
+    // browser. A plain query stays on the cheap surface.
+    let classic = !dork;
     for (let round = 0; round < rounds; round += 1) {
       const lastRound = round === rounds - 1;
       // Respect the request budget. Without this the retry rounds can eat the
@@ -902,9 +909,6 @@ async function googleLiteSearch({ engine, query, num, hl, gl, start, tbs, before
       // Exits that already answered without honouring the site: constraint are
       // skipped, so the retry lands on a different exit.
       const pool = proxies.filter((p) => !triedExits.has(p));
-      // A dork starts on the cheap surface, where the operator travels as
-      // as_sitesearch/as_filetype. When that surface does not honour it, every
-      // hit is off target and the next round asks for the modern surface.
       const { url, geo } = googleLite.buildLiteUrl({
         q: query,
         num: Math.min(10, want - results.length),
@@ -914,10 +918,10 @@ async function googleLiteSearch({ engine, query, num, hl, gl, start, tbs, before
         tbs,
         before,
         after,
-        classic: dork ? round === 0 : true,
+        classic,
       });
       try {
-        pack = await googleLite.fetchGoogleLite({
+        const fetched = await googleLite.fetchGoogleLite({
           url,
           geo,
           proxies: pool.length ? pool : proxies,
@@ -931,6 +935,37 @@ async function googleLiteSearch({ engine, query, num, hl, gl, start, tbs, before
           prefer: transport,
           dork,
         });
+        transport = fetched.transport || transport;
+        if (!extras) extras = fetched.extras || parseExtras(fetched.html);
+        let pageAdded = 0;
+        for (const r of parser(fetched.html)) {
+          if (!r || !r.url || seen.has(r.url)) continue;
+          if (siteTargets.length && !matchesSite(r.url, siteTargets)) continue;
+          seen.add(r.url);
+          results.push(r);
+          pageAdded += 1;
+          if (results.length >= want) break;
+        }
+        pack = fetched;
+        added += pageAdded;
+        if (siteTargets.length && pageAdded === 0) {
+          // Google answered, but it ignored the site: constraint here. That
+          // happens on the cheap surface and on the exits that serve a
+          // degraded SERP, so the answer is worth another try on the modern
+          // surface and on another exit before it is given up on.
+          if (fetched.proxy) triedExits.add(fetched.proxy);
+          if (classic) {
+            classic = false;
+            continue;
+          }
+          if (!lastRound) continue;
+          exhausted = true;
+          lastErr = Object.assign(
+            new Error(`Google did not honour the site: constraint for ${siteTargets.join(', ')}`),
+            { code: 'DORK_UNMATCHED' },
+          );
+          break;
+        }
         break;
       } catch (caught) {
         err = caught;
@@ -941,33 +976,7 @@ async function googleLiteSearch({ engine, query, num, hl, gl, start, tbs, before
       lastErr = err;
       break;
     }
-    transport = pack.transport || transport;
-    if (!extras) extras = pack.extras || parseExtras(pack.html);
-    let added = 0;
-    let offTarget = 0;
-    for (const r of parser(pack.html)) {
-      if (!r || !r.url || seen.has(r.url)) continue;
-      if (siteTargets.length && !matchesSite(r.url, siteTargets)) {
-        offTarget += 1;
-        continue;
-      }
-      seen.add(r.url);
-      results.push(r);
-      added += 1;
-      if (results.length >= want) break;
-    }
-    if (siteTargets.length && added === 0) {
-      // Google answered, but it ignored the site: constraint on this exit. That
-      // happens on a share of the exits that serve a degraded SERP, so the
-      // answer is worth retrying on another exit before giving up.
-      if (pack.proxy) triedExits.add(pack.proxy);
-      if (!exhausted) continue;
-      lastErr = Object.assign(
-        new Error(`Google did not honour the site: constraint for ${siteTargets.join(', ')}`),
-        { code: 'DORK_UNMATCHED' }
-      );
-      break;
-    }
+    if (lastErr && lastErr.code === 'DORK_UNMATCHED') break;
     // Nothing new on this page means the next one will not help either.
     if (added === 0) break;
   }

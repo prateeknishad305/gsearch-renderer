@@ -542,6 +542,43 @@ async function fetchViaChrome(url, proxies, timeoutMs, budgetMs) {
 // advanced-search parameter instead of inside the query string, and the
 // caller checks every hit against the operator, so a surface that ignores it
 // is detected and escalated to the modern one.
+// Every exit is a datacenter IP: Google serves those a degraded SERP without
+// operator support, so a dork cannot be answered through them.
+function exitsAreDatacenter(proxies) {
+  const list = (proxies || []).filter(Boolean);
+  if (!list.length) return false;
+  try {
+    const { partitionPool } = require('./proxyPool');
+    const { residential, unknown, datacenter } = partitionPool(list);
+    return residential.length === 0 && unknown.length === 0 && datacenter.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+// Every exit answered with an interstitial before, so another render through
+// them is very unlikely to be different.
+function exitsAreGated(proxies) {
+  const list = (proxies || []).filter(Boolean);
+  if (!list.length) return false;
+  return list.every((p) => {
+    const s = exitState.get(p);
+    return !!s && (s.kind === 'gated' || s.kind === 'dead');
+  });
+}
+
+// The reason a Google dork cannot be satisfied, in words the caller can act
+// on. Empty when there is nothing specific to say.
+function dorkObstacle(proxies) {
+  if (exitsAreGated(proxies)) {
+    return 'every proxy exit answered Google with an interstitial, so the site: constraint could not be checked there';
+  }
+  if (exitsAreDatacenter(proxies)) {
+    return 'every proxy exit is a datacenter IP, and Google serves those a degraded SERP without operator support';
+  }
+  return '';
+}
+
 function httpIsUseful(proxies, dork) {
   const mode = String(process.env.LITE_GOOGLE_HTTP || 'auto').toLowerCase();
   if (mode === '0') return false;
@@ -593,7 +630,14 @@ async function fetchGoogleLite({
   // bing/duckduckgo, which are the engines that honour site: without a
   // browser.
   if (dork && budgetMs) {
-    const cap = Math.max(2000, intEnv('LITE_DORK_CHROME_MS', 6000));
+    // A render through exits that already answered with an interstitial is
+    // very unlikely to be different, so it gets a short slice instead of
+    // taking the budget away from the engines that can answer.
+    const gated = exitsAreGated(proxies);
+    const cap = Math.max(
+      2000,
+      gated ? intEnv('LITE_DORK_GATED_MS', 3500) : intEnv('LITE_DORK_CHROME_MS', 6000),
+    );
     budgetMs = Math.min(budgetMs, cap);
   }
   const httpTimeout = budgetMs ? Math.max(800, Math.min(timeoutMs, budgetMs)) : timeoutMs;
@@ -614,9 +658,8 @@ async function fetchGoogleLite({
   } else if (prefer === 'proxy') {
     attempts = [exitsAttempt].concat(allowDirect ? [directAttempt] : []);
   } else if (!httpIsUseful(proxies, dork)) {
-    // No residential exit, or a dork the basic-HTML surface cannot serve:
-    // plain HTTP cannot work, so do not spend a race on it. Go to the browser
-    // straight away.
+    // No residential exit: plain HTTP gets an interstitial from Google, so do
+    // not spend a race on it. Go to the browser straight away.
     attempts = allowChrome ? [chromeAttempt] : [];
   } else {
     attempts = (allowDirect ? [directAttempt] : []).concat([exitsAttempt]);
@@ -653,6 +696,9 @@ module.exports = {
   buildLiteUrl,
   geoFromUrl,
   httpIsUseful,
+  dorkObstacle,
+  exitsAreDatacenter,
+  exitsAreGated,
   liteHeaders,
   isGoogleBlocked,
   looksLikeSerp,

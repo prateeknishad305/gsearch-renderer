@@ -759,6 +759,42 @@ the budget (`LITE_DORK_ENGINE_MS`), and the plain-HTTP engines use their
 lite path only — their browser fallback costs seconds and cannot add
 anything the operator-aware lite path does not have.
 
+#### Every engine can answer a dork
+
+An engine that does not understand `site:` must not be handed the token:
+typed into a search box without operator support it is searched for as the
+literal text `site:python.org`, which returns nothing useful. So every
+engine gets the query in its own dialect:
+
+| Engine | What it receives for `site:python.org asyncio filetype:pdf` |
+|--------|--------------------------------------------------------------|
+| `google`, `google_lite`, `chrome` | the operator is moved into `as_sitesearch` / `as_filetype` and stripped from the query, because Google drops the operator from `q` on automated traffic |
+| `yandex` | its own dialect: `url:`, `title:`, `mime:` |
+| `bing`, `duckduckgo`, `mojeek`, `brave`, `startpage`, `ecosia`, `qwant`, `yahoo` | the operators they understand, untouched |
+| `wiby`, `github`, `wikipedia`, `archive`, `shodan` | a clean query without the operator — the constraint is enforced on the results instead, so they can still answer with on-target hits |
+
+The engines that understand the operator answer first, the others stay in the
+chain, and a query that is nothing but an operator (`site:github.com`) keeps
+its value as a plain word so the engine is never asked an empty question.
+
+#### Datacenter proxies
+
+Google serves datacenter IPs a degraded SERP without operator support, so a
+`site:` dork cannot be answered through them. The renderer does not fight
+that: exits that already answered with an interstitial get a short slice
+instead of the whole budget, and the response names the reason instead of
+hiding it:
+
+```
+Search returned results, but none matched the site: filter for "site:python.org".
+Reason: every proxy exit is a datacenter IP, and Google serves those a
+degraded SERP without operator support.
+```
+
+The plain-HTTP engines (bing, duckduckgo, mojeek, …) have no such
+problem, so a dork that Google cannot serve is answered by them while the
+Google path is still tried in parallel.
+
 Two Google surfaces are attached to Google results because they are **not**
 behind the JavaScript gate and therefore keep working from a datacenter IP:
 

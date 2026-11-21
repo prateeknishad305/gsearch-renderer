@@ -176,6 +176,21 @@ function withGoogleLiteFallback(list) {
   return list.slice();
 }
 
+// Why a Google dork could not be satisfied, when the proxy pool is the
+// reason. Empty when there is nothing specific to say.
+function dorkObstacleNote() {
+  try {
+    const { getShardPool, googleProxyPool } = require('./lib/proxyPool');
+    const { getLivePool } = require('./lib/proxyFetch');
+    const googleLite = require('./lib/googleLite');
+    const local = googleProxyPool(getShardPool());
+    const live = getLivePool();
+    return googleLite.dorkObstacle(live.length ? live : local);
+  } catch {
+    return '';
+  }
+}
+
 // The operators that were applied, so the error message names them.
 function dorkFilterLabel(dorkInfo) {
   const ops = Object.keys((dorkInfo && dorkInfo.operators) || {});
@@ -290,20 +305,24 @@ function withFallbacks(list, dorkInfo) {
   // degraded SERP without operator support on a share of its exits, so the
   // operator-capable engines are tried before the (expensive) browser
   // fallback, and long before the budget runs out.
+  //
+  // The engines without operator support stay in the chain: their operator is
+  // stripped from the query and the constraint is enforced on their results,
+  // so they can still answer with on-target hits. Dropping them would leave a
+  // dork with nothing to fall back on.
   if (dorkInfo && dorkInfo.has_operators) {
     const sites = dorkInfo.site_targets || [];
     const capable = chain.filter((e) => {
       if (!sites.length) return true;
       return engineSupport(e, dorkInfo).supported.includes('site');
     });
-    if (capable.length) {
+    const rest = chain.filter((e) => !capable.includes(e));
+    const ordered = capable.concat(rest);
+    if (ordered.length) {
       const chromeIdx = out.indexOf('chrome');
       const insertAt = chromeIdx >= 0 ? chromeIdx : out.length;
-      out.splice(insertAt, 0, ...capable);
-      for (const e of capable) {
-        const i = chain.indexOf(e);
-        if (i >= 0) chain.splice(i, 1);
-      }
+      out.splice(insertAt, 0, ...ordered);
+      chain.length = 0;
     }
   }
   return out.concat(chain);
@@ -1126,7 +1145,17 @@ async function handleSearch(req, res) {
         // A raced winner already carries its result object; the normal path
         // still has to fetch one.
         if (r === null) {
-          r = await searchEngine({ engine, query: engineQuery, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless, liteOnly: dorkLiteOnly(engine, dorkMode, liteOnly), renderOnly, browser, deadlineAt: engineDeadline, tbs, before, after });
+          // A retry after an off-target answer has to leave the exit that
+          // produced it: the same exit serves the same degraded SERP.
+          let attemptProxy = proxy;
+          if (dorkMode && attempt > 0) {
+            attemptProxy = undefined;
+            if (isGoogleEngine(engine)) {
+              const { dropStickyGoogleProxy } = require('./lib/proxyPool');
+              dropStickyGoogleProxy(`g:${engineQuery}|${hl}|${gl}`);
+            }
+          }
+          r = await searchEngine({ engine, query: engineQuery, num, pages, start, hl, gl, proxy: attemptProxy, debug, autoPages, proxyless, liteOnly: dorkLiteOnly(engine, dorkMode, liteOnly), renderOnly, browser, deadlineAt: engineDeadline, tbs, before, after });
         }
         fetched = (r.results || []).length;
         results = shodanOptionsActive(shodanOpts)
@@ -1233,6 +1262,10 @@ async function handleSearch(req, res) {
   // When an engine answered but every hit was removed by the site:/filetype:
   // filter, say so instead of claiming the engine could not be reached.
   const filteredCode = dorkFilteredOut ? 'EMPTY_RESULTS' : publicCode(lastErr.code);
+  // A dork that failed because of the proxy pool should say so: the caller
+  // can fix that, unlike a failed search.
+  const obstacle = dorkMode && dorkInfo.has_operators ? dorkObstacleNote() : '';
+  const obstacleNote = obstacle ? ` Reason: ${obstacle}.` : '';
   const failed = {
     engine: requested,
     requested_engine: requested,
@@ -1242,8 +1275,8 @@ async function handleSearch(req, res) {
     success: false,
     code: filteredCode,
     error: dorkFilteredOut
-      ? `Search returned results, but none matched the ${dorkFilterLabel(dorkInfo)} filter for "${q}".`
-      : publicMessage(requested, lastErr),
+      ? `Search returned results, but none matched the ${dorkFilterLabel(dorkInfo)} filter for "${q}".${obstacleNote}`
+      : `${publicMessage(requested, lastErr)}${obstacleNote}`,
     count: 0,
     results: [],
     duration_ms: Date.now() - t0,
@@ -1258,6 +1291,7 @@ async function handleSearch(req, res) {
       requested_engine: requested,
       auto_fallback: !noFallback && !googleStandalone(),
       engines: attemptsDetail,
+      ...(obstacle ? { obstacle } : {}),
     };
   }
   return send(res, failed);

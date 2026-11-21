@@ -28,7 +28,7 @@ const CAPABILITY = {
   google: ['site', 'inurl', 'intitle', 'intext', 'allintext', 'inbody', 'inanchor', 'filetype', 'related', 'cache'],
   google_lite: ['site', 'inurl', 'intitle', 'intext', 'allintext', 'inbody', 'inanchor', 'filetype', 'related', 'cache'],
   chrome: ['site', 'inurl', 'intitle', 'intext', 'allintext', 'inbody', 'inanchor', 'filetype', 'related', 'cache'],
-  bing: ['site', 'intitle', 'intext', 'inbody', 'inanchor', 'filetype'],
+  bing: ['site', 'inurl', 'intitle', 'intext', 'inbody', 'inanchor', 'filetype'],
   yahoo: ['site', 'intitle', 'inurl', 'filetype'],
   duckduckgo: ['site', 'intitle', 'inurl', 'filetype'],
   duckduckgo_lite: ['site', 'intitle', 'inurl', 'filetype'],
@@ -98,39 +98,131 @@ function parseDork(query) {
   };
 }
 
+// The operators an engine understands natively. An engine that does not
+// understand an operator must not receive it: "site:python.org" typed into a
+// search box without operator support is searched for as the literal text
+// "site:python.org", which returns nothing useful. The operator is dropped
+// from the query instead and the constraint is enforced on the results.
+function nativeSupport(engine) {
+  const list = CAPABILITY[engine];
+  return Array.isArray(list) ? list : [];
+}
+
+// The Google family receives the operator as an advanced-search parameter
+// (as_sitesearch/as_filetype) rather than inside the query string, because
+// Google drops the operator from q on automated traffic. The query therefore
+// keeps the operator here; the URL builder moves it.
+function usesOperatorParameter(engine) {
+  return engine === 'google' || engine === 'google_lite' || engine === 'chrome';
+}
+
+// filetype:, ext: and mime: are the same constraint spelled differently.
+const FILETYPE_KEYS = ['filetype', 'ext', 'mime'];
+
+function isFileTypeKey(key) {
+  return FILETYPE_KEYS.includes(key);
+}
+
+// The operator patterns, keyed by the name used in the capability table.
+const OPERATOR_RE = {};
+for (const [key, re] of OPERATORS) OPERATOR_RE[key] = re;
+
+// Removes the given operators from a query.
+function stripOperators(query, keys) {
+  let q = String(query || '');
+  for (const key of keys || []) {
+    const re = isFileTypeKey(key) ? FILETYPE_RE : OPERATOR_RE[key];
+    if (!re) continue;
+    re.lastIndex = 0;
+    q = q.replace(re, ' ');
+  }
+  return q.replace(/\s+/g, ' ').trim();
+}
+
+// Rewrites an operator into the spelling the engine uses. The value of the
+// operator has to survive the rewrite.
+const DIALECT = {
+  yandex: { inurl: 'url', intitle: 'title', filetype: 'mime', ext: 'mime' },
+};
+
+function translateDialect(query, engine) {
+  let q = String(query || '');
+  const map = DIALECT[engine];
+  if (map) {
+    for (const [from, to] of Object.entries(map)) {
+      const re = OPERATOR_RE[from];
+      if (!re) continue;
+      re.lastIndex = 0;
+      q = q.replace(re, (match, value) => `${to}:${value}`);
+    }
+  }
+  // Everywhere but yandex the file type operator is called filetype:.
+  if (engine !== 'yandex') {
+    q = q.replace(/\bmime:/gi, 'filetype:').replace(/\bext:/gi, 'filetype:');
+  }
+  return q;
+}
+
 function engineSupport(engine, dorkInfo) {
-  const supported = new Set(CAPABILITY[engine] || ['site', 'filetype']);
+  const supported = new Set(nativeSupport(engine));
   const used = Object.keys((dorkInfo && dorkInfo.operators) || {});
   return {
     supported: used.filter((k) => supported.has(k)),
     unsupported: used.filter((k) => !supported.has(k)),
+    // Whether the engine honours the site: constraint on its own. An engine
+    // that does not can still answer a dork, its hits are just checked
+    // against the constraint afterwards.
+    site_native: supported.has('site'),
   };
 }
 
-// Yandex uses different operator names. Other engines keep the query as-is;
-// unsupported operators are reported instead of silently rewritten.
+// Builds the query an engine is actually asked for.
+//
+// - operators the engine understands are kept, in the engine's own spelling;
+// - operators it does not understand are removed, so the engine searches for
+//   the words of the query instead of the operator token;
+// - the Google family keeps the operator, because its URL builder moves it
+//   into as_sitesearch/as_filetype.
 function adaptQuery(query, engine) {
-  let q = String(query || '');
-  if (engine === 'yandex') {
-    q = q
-      .replace(/\binurl:/gi, 'url:')
-      .replace(/\bintitle:/gi, 'title:')
-      .replace(/\bfiletype:/gi, 'mime:')
-      .replace(/\bext:/gi, 'mime:');
-  }
-  return q.replace(/\s+/g, ' ').trim();
+  const raw = String(query || '');
+  let q = translateDialect(raw, engine);
+  if (usesOperatorParameter(engine)) return q.replace(/\s+/g, ' ').trim();
+
+  // The operators that are left after the dialect rewrite decide what the
+  // engine can keep.
+  const info = parseDork(q);
+  const supported = new Set(nativeSupport(engine));
+  // The file type family counts as one operator: an engine that understands
+  // filetype: understands ext: and mime: as well.
+  const understandsFileType = FILETYPE_KEYS.some((k) => supported.has(k));
+  const drop = Object.keys(info.operators || {}).filter((k) => {
+    if (isFileTypeKey(k)) return !understandsFileType;
+    return !supported.has(k);
+  });
+  if (drop.length) q = stripOperators(q, drop);
+  q = q.replace(/\s+/g, ' ').trim();
+  if (q) return q;
+  // The query was nothing but operators ("site:github.com"). Stripping them
+  // would leave the engine with an empty query, so the value of the operator
+  // becomes a plain word instead: the engine still has something to search
+  // for and the constraint is enforced on the results.
+  const words = []
+    .concat(info.site_targets || [])
+    .concat(Object.values(info.operators || {}).flat())
+    .map((v) => String(v).replace(/^["']|["']$/g, '').trim())
+    .filter(Boolean);
+  return Array.from(new Set(words)).join(' ');
 }
 
 // Google honours its advanced-search parameters (as_sitesearch/as_filetype)
 // even when it drops the matching operator from q on automated traffic, so
 // callers move the operator into a parameter and strip it from the query.
-const STRIP_PATTERNS = {
-  site: /\bsite:\s*("[^"]+"|[^\s]+)/gi,
-  filetype: /\b(?:filetype|ext|mime):\s*("[^"]+"|[^\s]+)/gi,
-};
+// filetype:, ext: and mime: all mean the same thing, so they are stripped
+// together.
+const FILETYPE_RE = /\b(?:filetype|ext|mime):\s*("[^"]+"|[^\s]+)/gi;
 
 function stripOperator(query, key) {
-  const re = STRIP_PATTERNS[key];
+  const re = isFileTypeKey(key) ? FILETYPE_RE : OPERATOR_RE[key];
   if (!re) return String(query || '');
   re.lastIndex = 0;
   return String(query || '')
@@ -240,7 +332,10 @@ module.exports = {
   parseDork,
   engineSupport,
   adaptQuery,
+  nativeSupport,
+  usesOperatorParameter,
   stripOperator,
+  stripOperators,
   canonicalUrl,
   dedupeResults,
   enforceDork,
