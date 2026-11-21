@@ -227,11 +227,15 @@ async function raceDorkEngines(engines, ctx) {
         before: ctx.before,
         after: ctx.after,
       });
-      let items = applyDomainFilters(r.results || [], ctx.resultFilters);
+      const raw = r.results || [];
+      let items = applyDomainFilters(raw, ctx.resultFilters);
       items = enforceDork(items, ctx.dorkInfo);
       if (!items.length) {
         const e = new Error(`Engine "${engine}" returned no on-target result`);
         e.code = 'EMPTY_RESULTS';
+        // The engine did answer, every hit was off target: that is a real
+        // answer, not an unreachable engine.
+        e.filteredOut = raw.length > 0;
         throw e;
       }
       return { engine, r, items };
@@ -242,13 +246,28 @@ async function raceDorkEngines(engines, ctx) {
   return new Promise((resolve, reject) => {
     let pending = runs.length;
     let lastErr = null;
-    for (const p of runs) {
-      p.then(
+    const outcomes = [];
+    for (let i = 0; i < runs.length; i += 1) {
+      const engine = engines[i];
+      const startedAt = Date.now();
+      runs[i].then(
         (value) => resolve(value),
         (err) => {
           lastErr = err;
+          outcomes.push({
+            engine,
+            success: false,
+            code: (err && err.code) || 'ERROR',
+            duration_ms: Date.now() - startedAt,
+            raced: true,
+            filtered_out: !!(err && err.filteredOut),
+          });
           pending -= 1;
-          if (pending === 0) reject(lastErr || new Error('no engine answered'));
+          if (pending === 0) {
+            const failure = lastErr || new Error('no engine answered');
+            failure.outcomes = outcomes;
+            reject(failure);
+          }
         },
       );
     }
@@ -986,12 +1005,7 @@ async function handleSearch(req, res) {
     let engine = tryList[ei];
     if (Date.now() >= deadlineAt - 1500) break;
     if (racedEngines.has(engine)) {
-      attemptsDetail.push({
-        engine,
-        success: false,
-        code: 'RACED_NO_MATCH',
-        duration_ms: 0,
-      });
+      // The race already ran this engine and recorded what it did.
       continue;
     }
     // For a dork the browser fallback repeats what google_lite already tried
@@ -1095,7 +1109,17 @@ async function handleSearch(req, res) {
           fetched = (r.results || []).length;
           raced = true;
         } catch (raceErr) {
+          if (raceErr && raceErr.filteredOut) dorkFilteredOut = true;
+          // Report what each engine in the race did, not just the last error.
+          const outcomes = (raceErr && raceErr.outcomes) || [];
+          for (const o of outcomes) {
+            if (o.filtered_out) dorkFilteredOut = true;
+            attemptsDetail.push(o);
+          }
           lastErr = raceErr && raceErr.code ? raceErr : Object.assign(new Error('no engine answered the dork'), { code: 'EMPTY_RESULTS' });
+          // Every engine in the race had its chance; running them again in
+          // the sequential pass would only spend the budget twice.
+          continue;
         }
       }
       for (let attempt = 0; attempt < engineTries; attempt += 1) {

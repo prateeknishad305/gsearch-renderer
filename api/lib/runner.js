@@ -297,7 +297,14 @@ async function runQuery(opts) {
   // A render must fit into the engine's slice of the request budget, otherwise
   // it consumes the whole budget and the remaining engines never run.
   const remaining = deadlineAt ? Math.max(0, deadlineAt - Date.now()) : Infinity;
-  const navMs = Math.max(1500, Math.min(google ? g.navTimeoutMs() : NAV_TIMEOUT_MS, remaining));
+  // A browser render needs a browser: starting one costs seconds, and that
+  // time has to come out of the budget as well. Leaving it out is how a single
+  // render overran the whole request window.
+  const launchAllowance = intEnv('RENDER_LAUNCH_ALLOWANCE_MS', 3000);
+  const navMs = Math.max(
+    1500,
+    Math.min(google ? g.navTimeoutMs() : NAV_TIMEOUT_MS, remaining - launchAllowance),
+  );
 
   const exec = async () =>
     withPage({ proxy, hl, gl, google, navMs, browser, checkoutMs: Math.max(1000, remaining) }, async (page, context) =>
