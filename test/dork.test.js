@@ -47,9 +47,12 @@ test('site targets are normalised to bare hosts', () => {
 
 test('engineSupport reports unsupported operators', () => {
   const info = parseDork('site:x.com inurl:login');
-  assert.deepEqual(engineSupport('bing', info).unsupported, ['inurl']);
+  // Bing honours both site: and inurl:, so nothing has to be taken away.
+  assert.deepEqual(engineSupport('bing', info).unsupported, []);
   assert.deepEqual(engineSupport('google', info).unsupported, []);
   assert.deepEqual(engineSupport('wiby', info).unsupported, ['site', 'inurl']);
+  assert.equal(engineSupport('bing', info).site_native, true);
+  assert.equal(engineSupport('wiby', info).site_native, false);
 });
 
 test('adaptQuery maps operators for yandex only', () => {

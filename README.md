@@ -719,6 +719,82 @@ wasting time and stops losing results:
 - **Ranking** — results carry an explicit `rank`, `displayedLink` and `date`,
   the same shape the Custom Search JSON API returns.
 
+### Dorks in the `google_lite` path (`site:`, `filetype:`, `inurl:`)
+
+`site:` and friends are supported end to end on `google_lite`. A dork is not
+just a string that is passed to Google: the result has to be *on target*, and
+that needs three things working together.
+
+**The right surface.** Google's basic-HTML backend (`gbv=2`) ignores the
+operators completely. A dork therefore always uses the modern SERP surface,
+which means a Chromium render for that query, and the plain-HTTP path is
+skipped instead of being spent on a page that cannot honour the operator.
+
+**The right host.** Bing wraps every result in a click tracker
+(`/ck/a?...&u=a1<base64url>`). The real destination only exists in that
+base64 payload, so before this fix every Bing result kept the `bing.com` host
+and was dropped by the `site:` filter — a dork could never be satisfied by
+Bing at all. The destination is now decoded, and the host that is checked is
+the host the user will actually be sent to.
+
+**The right engine.** Google honours `site:` only on the share of its exits
+that serve the modern surface to a clean IP, and it needs a browser to do it.
+So for a dork the operator-aware engines are **raced against** the primary
+engine instead of being queued behind it: bing and duckduckgo answer in
+milliseconds, Google needs a browser. Whoever produces on-target results
+first wins, and the primary engine still gets its chance whenever it can
+answer.
+
+| Step | What happens |
+|------|--------------|
+| 1 | The dork is parsed (`site:`, `filetype:`, `inurl:`, `intitle:`, `-`) and the `site:` targets are extracted. |
+| 2 | The primary engine and the operator-aware engines are raced. |
+| 3 | Every hit is checked against the `site:`/`filetype:` filter **client side**, so an engine that ignores the operator cannot smuggle in off-target results. |
+| 4 | An engine that answered but produced nothing on target is retried on another exit before it is given up on (`DORK_RETRIES`). |
+| 5 | If no engine can satisfy the operator, the response says so: `Search returned results, but none matched the site:/filetype: filter` instead of a misleading `ENGINE_UNAVAILABLE`. |
+
+Dork queries also respect the request budget: the browser render for a dork
+is capped (`LITE_DORK_CHROME_MS`), the primary engine only gets a slice of
+the budget (`LITE_DORK_ENGINE_MS`), and the plain-HTTP engines use their
+lite path only — their browser fallback costs seconds and cannot add
+anything the operator-aware lite path does not have.
+
+#### Every engine can answer a dork
+
+An engine that does not understand `site:` must not be handed the token:
+typed into a search box without operator support it is searched for as the
+literal text `site:python.org`, which returns nothing useful. So every
+engine gets the query in its own dialect:
+
+| Engine | What it receives for `site:python.org asyncio filetype:pdf` |
+|--------|--------------------------------------------------------------|
+| `google`, `google_lite`, `chrome` | the operator is moved into `as_sitesearch` / `as_filetype` and stripped from the query, because Google drops the operator from `q` on automated traffic |
+| `yandex` | its own dialect: `url:`, `title:`, `mime:` |
+| `bing`, `duckduckgo`, `mojeek`, `brave`, `startpage`, `ecosia`, `qwant`, `yahoo` | the operators they understand, untouched |
+| `wiby`, `github`, `wikipedia`, `archive`, `shodan` | a clean query without the operator — the constraint is enforced on the results instead, so they can still answer with on-target hits |
+
+The engines that understand the operator answer first, the others stay in the
+chain, and a query that is nothing but an operator (`site:github.com`) keeps
+its value as a plain word so the engine is never asked an empty question.
+
+#### Datacenter proxies
+
+Google serves datacenter IPs a degraded SERP without operator support, so a
+`site:` dork cannot be answered through them. The renderer does not fight
+that: exits that already answered with an interstitial get a short slice
+instead of the whole budget, and the response names the reason instead of
+hiding it:
+
+```
+Search returned results, but none matched the site: filter for "site:python.org".
+Reason: every proxy exit is a datacenter IP, and Google serves those a
+degraded SERP without operator support.
+```
+
+The plain-HTTP engines (bing, duckduckgo, mojeek, …) have no such
+problem, so a dork that Google cannot serve is answered by them while the
+Google path is still tried in parallel.
+
 Two Google surfaces are attached to Google results because they are **not**
 behind the JavaScript gate and therefore keep working from a datacenter IP:
 

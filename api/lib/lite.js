@@ -124,6 +124,37 @@ function decodeEntities(s) {
   return String(s || '').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#x27;/g, "'").trim();
 }
 
+// Bing wraps every result in a click tracker: /ck/a?...&u=a1<base64url>.
+// The real destination only exists in that base64 payload, so a result that is
+// not decoded keeps the bing.com host and is dropped by every site: filter.
+function decodeBingHref(href) {
+  const url = decodeEntities(String(href || '').trim());
+  if (!url) return '';
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (host !== 'bing.com' && !host.endsWith('.bing.com')) return url;
+  const encoded = parsed.searchParams.get('u');
+  if (!encoded) return url;
+  let raw = encoded;
+  // Bing prefixes the payload with "a1".
+  if (/^a1/.test(raw)) raw = raw.slice(2);
+  raw = raw.replace(/-/g, '+').replace(/_/g, '/');
+  while (raw.length % 4) raw += '=';
+  let decoded = '';
+  try {
+    decoded = Buffer.from(raw, 'base64').toString('utf8');
+  } catch {
+    return url;
+  }
+  decoded = decodeEntities(decoded.trim());
+  return /^https?:\/\//i.test(decoded) ? decoded : url;
+}
+
 function decodeHref(raw) {
   let href = String(raw || '').trim();
   if (href.startsWith('//')) href = `https:${href}`;
@@ -179,6 +210,7 @@ const PARSERS = {
   bing: (html) => parseAnchorBlocks(html, {
     hostRe: /bing\.com$/i,
     titleRe: /<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi,
+    decode: decodeBingHref,
   }),
   brave: (html) => parseAnchorBlocks(html, {
     hostRe: /brave\.com$/i,
@@ -221,13 +253,18 @@ function hostOf(url) {
   }
 }
 
-function parseAnchorBlocks(html, { hostRe, titleRe }) {
+function parseAnchorBlocks(html, { hostRe, titleRe, decode }) {
   const results = [];
   const seen = new Set();
-  const re = new RegExp(titleRe.source, titleRe.flags);
+  // A malformed pattern must not turn into an empty regex: an empty regex
+  // matches at every position and would spin here forever.
+  const src = titleRe instanceof RegExp ? titleRe.source : String(titleRe || '');
+  if (!src) return results;
+  const re = new RegExp(src, titleRe instanceof RegExp ? titleRe.flags : 'gi');
   let m;
   while ((m = re.exec(html))) {
-    let url = decodeEntities(m[1]);
+    if (m[0] === "") re.lastIndex++;  // zero-length match would loop forever
+    let url = decode ? decode(m[1]) : decodeEntities(m[1]);
     if (url.startsWith('//')) url = `https:${url}`;
     if (!/^https?:\/\//i.test(url)) continue;
     if (hostRe.test(hostOf(url))) continue;
@@ -263,6 +300,7 @@ function parseYahooLite(html) {
   const re = /<h3[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi;
   let m;
   while ((m = re.exec(html))) {
+    if (m[0] === "") re.lastIndex++;  // zero-length match would loop forever
     let url = decodeEntities(m[1]);
     if (url.includes('/RU=')) {
       const ru = url.match(/\/RU=([^/]+)/);
@@ -375,6 +413,7 @@ function parseGithubLite(html) {
   const re = /class="[^"]*search-title[^"]*"[\s\S]{0,400}?href="([^"]+)"[\s\S]{0,400}?>([\s\S]*?)<\/a>/gi;
   let m;
   while ((m = re.exec(String(html || '')))) {
+    if (m[0] === "") re.lastIndex++;  // zero-length match would loop forever
     const url = repoUrl(decodeEntities(m[1]));
     if (!url || seen.has(url)) continue;
     const title = decodeEntities(stripTags(m[2])) || url.replace('https://github.com/', '');
@@ -391,6 +430,7 @@ function parseArchiveHtmlLite(html) {
   const re = /href="(\/details\/[^"?#]+)"[^>]*>([\s\S]*?)<\/a>/gi;
   let m;
   while ((m = re.exec(String(html || '')))) {
+    if (m[0] === "") re.lastIndex++;  // zero-length match would loop forever
     const id = decodeEntities(m[1]).replace(/^\/details\//, '').split('/')[0];
     if (!id || /[/\s]/.test(id)) continue;
     const url = `https://archive.org/details/${encodeURIComponent(id)}`;
@@ -798,16 +838,38 @@ async function googleExits() {
   }
 }
 
+// A site: dork is only honoured by some of the exits that serve Google, so
+// the lite path has to be able to tell that a page did not respect it.
+function matchesSite(url, targets) {
+  let host = '';
+  try {
+    host = new URL(url).hostname;
+  } catch {
+    return false;
+  }
+  const { hostMatchesSite } = require('./dork');
+  return targets.some((t) => hostMatchesSite(host, t));
+}
+
 // Google lite search: geo-correct URL, hardened transport, and a page loop
 // that tops up short pages so a request for N results actually returns N.
 async function googleLiteSearch({ engine, query, num, hl, gl, start, tbs, before, after, deadlineAt }) {
   const googleLite = require('./googleLite');
   const { parseExtras } = require('./googleExtract');
+  const { parseDork, isHostSiteTarget, hostMatchesSite } = require('./dork');
   const t0 = Date.now();
   const want = Math.max(1, Number(num) || 10);
   const base = Math.max(0, Number(start) || 0);
   const results = [];
   const seen = new Set();
+  const dorkInfo = parseDork(String(query || ''));
+  const siteTargets = dorkInfo.site_targets.filter(isHostSiteTarget);
+  // A dork is answered through Google's modern surface: the basic-HTML
+  // surface is tried first because it is cheap, but the operator travels as
+  // as_sitesearch/as_filetype and every hit is checked, so a surface that
+  // ignores the operator is detected and escalated.
+  const dork = dorkInfo.has_operators;
+  const triedExits = new Set();
   let extras = null;
   let lastErr = null;
   let transport = null;
@@ -818,56 +880,103 @@ async function googleLiteSearch({ engine, query, num, hl, gl, start, tbs, before
   const rounds = Math.max(1, Math.min(4, parseInt(process.env.LITE_GOOGLE_ROUNDS, 10) || 3));
   const proxies = await googleExits();
   const parser = PARSERS[engine] || PARSERS.google;
+  // When the plain-HTTP path cannot serve this query (no residential exit),
+  // the browser is not the last resort but the only option, so it is allowed
+  // straight away.
+  const httpUseful = googleLite.httpIsUseful(proxies, dork);
 
   for (let page = 0; page < maxPages; page += 1) {
     if (results.length >= want) break;
     if (deadlineAt && Date.now() + 800 > deadlineAt) break;
-    const { url, geo } = googleLite.buildLiteUrl({
-      q: query,
-      num: Math.min(10, want - results.length),
-      start: base + page * 10,
-      hl,
-      gl,
-      tbs,
-      before,
-      after,
-    });
     let pack = null;
     let err = null;
+    let exhausted = false;
+    let added = 0;
+    // A dork starts on the cheap surface, where the operator travels as
+    // as_sitesearch/as_filetype. When that surface does not honour it, the
+    // next round asks for the modern surface, and the round after that for a
+    // browser. A plain query stays on the cheap surface.
+    let classic = !dork;
     for (let round = 0; round < rounds; round += 1) {
       const lastRound = round === rounds - 1;
+      // Respect the request budget. Without this the retry rounds can eat the
+      // whole budget and leave nothing for the fallback engines, which is how a
+      // dork ended up with no answer at all.
+      if (deadlineAt && Date.now() + 1200 > deadlineAt) {
+        exhausted = true;
+        break;
+      }
+      // Exits that already answered without honouring the site: constraint are
+      // skipped, so the retry lands on a different exit.
+      const pool = proxies.filter((p) => !triedExits.has(p));
+      const { url, geo } = googleLite.buildLiteUrl({
+        q: query,
+        num: Math.min(10, want - results.length),
+        start: base + page * 10,
+        hl,
+        gl,
+        tbs,
+        before,
+        after,
+        classic,
+      });
       try {
-        pack = await googleLite.fetchGoogleLite({
+        const fetched = await googleLite.fetchGoogleLite({
           url,
           geo,
-          proxies,
+          proxies: pool.length ? pool : proxies,
           timeoutMs,
           // Chromium is by far the most expensive transport, so it is only used
           // once the cheap ones have used up their rounds. Without this a
           // single query could spend 12s per page inside the renderer.
-          allowChrome: lastRound,
+          allowChrome: lastRound || !httpUseful,
+          deadlineAt,
           // Reuse whatever worked for the previous page.
           prefer: transport,
+          dork,
         });
+        transport = fetched.transport || transport;
+        if (!extras) extras = fetched.extras || parseExtras(fetched.html);
+        let pageAdded = 0;
+        for (const r of parser(fetched.html)) {
+          if (!r || !r.url || seen.has(r.url)) continue;
+          if (siteTargets.length && !matchesSite(r.url, siteTargets)) continue;
+          seen.add(r.url);
+          results.push(r);
+          pageAdded += 1;
+          if (results.length >= want) break;
+        }
+        pack = fetched;
+        added += pageAdded;
+        if (siteTargets.length && pageAdded === 0) {
+          // Google answered, but it ignored the site: constraint here. That
+          // happens on the cheap surface and on the exits that serve a
+          // degraded SERP, so the answer is worth another try on the modern
+          // surface and on another exit before it is given up on.
+          if (fetched.proxy) triedExits.add(fetched.proxy);
+          if (classic) {
+            classic = false;
+            continue;
+          }
+          if (!lastRound) continue;
+          exhausted = true;
+          lastErr = Object.assign(
+            new Error(`Google did not honour the site: constraint for ${siteTargets.join(', ')}`),
+            { code: 'DORK_UNMATCHED' },
+          );
+          break;
+        }
         break;
       } catch (caught) {
         err = caught;
+        if (lastRound) exhausted = true;
       }
     }
     if (!pack) {
       lastErr = err;
       break;
     }
-    transport = pack.transport || transport;
-    if (!extras) extras = pack.extras || parseExtras(pack.html);
-    let added = 0;
-    for (const r of parser(pack.html)) {
-      if (!r || !r.url || seen.has(r.url)) continue;
-      seen.add(r.url);
-      results.push(r);
-      added += 1;
-      if (results.length >= want) break;
-    }
+    if (lastErr && lastErr.code === 'DORK_UNMATCHED') break;
     // Nothing new on this page means the next one will not help either.
     if (added === 0) break;
   }
@@ -945,4 +1054,14 @@ async function fastLiteSearch({ engine, query, num = 10, hl = 'en', gl = 'us', s
   };
 }
 
-module.exports = { fastLiteSearch, ENDPOINTS, PARSERS, JSON_ENGINES, isBlockedPage };
+module.exports = {
+  fastLiteSearch,
+  ENDPOINTS,
+  PARSERS,
+  JSON_ENGINES,
+  isBlockedPage,
+  // Exported for tests and for the dork filter, which needs the real host.
+  decodeBingHref,
+  parseAnchorBlocks,
+  matchesSite,
+};

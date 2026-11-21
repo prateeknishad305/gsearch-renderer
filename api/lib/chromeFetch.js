@@ -165,7 +165,7 @@ function hasHits(html, engine) {
   return /<h3/i.test(html) || /<cite/i.test(html);
 }
 
-async function fetchHtml(url, { proxy, timeoutMs, engine, allowDirect = true } = {}) {
+async function fetchHtml(url, { proxy, timeoutMs, checkoutMs, signal, engine, allowDirect = true } = {}) {
   if (!fetchOn()) {
     const e = new Error('chrome fetch off');
     e.code = 'SKIP';
@@ -178,10 +178,14 @@ async function fetchHtml(url, { proxy, timeoutMs, engine, allowDirect = true } =
     e.code = 'NO_PROXY';
     throw e;
   }
-  const timeout = Math.max(8000, timeoutMs || intEnv('CHROME_FETCH_MS', 8000));
+  // An explicit timeout wins over the default: the caller clamps it to the
+  // request budget, and a hard floor here would silently overrun it.
+  const timeout = timeoutMs
+    ? Math.max(800, timeoutMs)
+    : Math.max(800, intEnv('CHROME_FETCH_MS', 8000));
   const site = siteOf(engine);
   const r = await withPage(
-    { proxy, google: site === 'google', hl: 'en', gl: 'us', navMs: timeout },
+    { proxy, google: site === 'google', hl: 'en', gl: 'us', navMs: timeout, checkoutMs, signal },
     async (page, context) => {
       if (site === 'google') {
         await context.addCookies(g.cookiesFor()).catch(() => {});
@@ -193,7 +197,7 @@ async function fetchHtml(url, { proxy, timeoutMs, engine, allowDirect = true } =
           ])
           .catch(() => {});
       }
-      return withTimeout(runSearch(page, site, url, timeout), timeout + 3000, 'TIMEOUT');
+      return withTimeout(runSearch(page, site, url, timeout), timeout + 1500, 'TIMEOUT');
     }
   );
   if (r && (hasHits(r.html, engine) || (r.results && r.results.length))) return r;

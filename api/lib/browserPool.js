@@ -36,11 +36,15 @@ function pageReuse() {
 
 const SLOT_WAIT_MS = intEnvZero('SLOT_WAIT_MS', 8000);
 
-async function acquireSlot() {
+// The caller can cap how long it is willing to queue for a worker: a request
+// with a short budget must not sit in the pool queue while the engines that
+// could still answer are waiting for it.
+async function acquireSlot(maxWaitMs) {
   if (active < MAX_CONTEXTS) {
     active += 1;
     return;
   }
+  const waitMs = Math.max(0, Number(maxWaitMs) || SLOT_WAIT_MS || 0);
   await new Promise((resolve, reject) => {
     let settled = false;
     const waiter = () => {
@@ -49,7 +53,7 @@ async function acquireSlot() {
       if (timer) clearTimeout(timer);
       resolve();
     };
-    const timer = SLOT_WAIT_MS
+    const timer = waitMs
       ? setTimeout(() => {
           if (settled) return;
           settled = true;
@@ -58,7 +62,7 @@ async function acquireSlot() {
           const e = new Error('browser workers busy');
           e.code = 'QUEUE_TIMEOUT';
           reject(e);
-        }, SLOT_WAIT_MS)
+        }, waitMs)
       : null;
     waiters.push(waiter);
   });
@@ -205,11 +209,17 @@ async function withBrowser(opts, fn) {
 }
 
 async function withPage(opts, fn) {
-  await acquireSlot();
+  const slotWait = opts.checkoutMs || (opts.navMs ? Math.max(1000, opts.navMs) : SLOT_WAIT_MS);
+  await acquireSlot(slotWait);
   let worker = null;
   let cancelled = false;
   try {
-    const checkoutMs = Math.max(8000, opts.navMs || SLOT_WAIT_MS || 8000);
+    // The caller can cap how long it is willing to wait for a slot: a render
+    // that cannot get a browser in time is worse than no render at all when
+    // the request budget is short.
+    const checkoutMs = opts.checkoutMs
+      ? Math.max(1000, opts.checkoutMs)
+      : Math.max(8000, opts.navMs || SLOT_WAIT_MS || 8000);
     const pending = checkout(opts).then((w) => {
       if (cancelled) {
         busyPages = Math.max(0, busyPages - 1);
@@ -238,7 +248,30 @@ async function withPage(opts, fn) {
       worker.page.setDefaultTimeout(navMs);
       worker.page.setDefaultNavigationTimeout(navMs);
     }
-    return await fn(worker.page, worker.context, worker.browser);
+    // When several renders are raced, the losers must stop instead of holding
+    // a browser slot: an abandoned render either blocks the pool or gets its
+    // browser closed underneath it.
+    let onAbort = null;
+    if (opts.signal) {
+      if (opts.signal.aborted) {
+        const e = new Error('render aborted');
+        e.code = 'SKIP';
+        throw e;
+      }
+      onAbort = () => {
+        try {
+          worker.page.close();
+        } catch {
+          /* ignore */
+        }
+      };
+      opts.signal.addEventListener('abort', onAbort, { once: true });
+    }
+    try {
+      return await fn(worker.page, worker.context, worker.browser);
+    } finally {
+      if (onAbort && opts.signal) opts.signal.removeEventListener('abort', onAbort);
+    }
   } catch (err) {
     cancelled = true;
     const dead =
@@ -301,6 +334,15 @@ async function warm() {
       getBrowser({ disableHttp2: true }),
       getBrowser({ disableHttp2: false }),
     ]);
+    // Warm the Google context as well. The first site:/filetype: query needs
+    // a browser, and building that context costs seconds that would
+    // otherwise be paid by the request that arrives first.
+    try {
+      const worker = await checkout({ google: true, hl: 'en', gl: 'us', proxy: null, disableHttp2: false });
+      await checkin(worker);
+    } catch {
+      /* the browser is warm enough */
+    }
     return true;
   } catch (err) {
     console.error('[gsearch-renderer] chromium warm failed:', (err && err.message) || err);
