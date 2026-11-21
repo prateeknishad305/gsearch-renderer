@@ -887,17 +887,6 @@ async function googleLiteSearch({ engine, query, num, hl, gl, start, tbs, before
   for (let page = 0; page < maxPages; page += 1) {
     if (results.length >= want) break;
     if (deadlineAt && Date.now() + 800 > deadlineAt) break;
-    const { url, geo } = googleLite.buildLiteUrl({
-      q: query,
-      num: Math.min(10, want - results.length),
-      start: base + page * 10,
-      hl,
-      gl,
-      tbs,
-      before,
-      after,
-      classic: !dork,
-    });
     let pack = null;
     let err = null;
     let exhausted = false;
@@ -913,6 +902,20 @@ async function googleLiteSearch({ engine, query, num, hl, gl, start, tbs, before
       // Exits that already answered without honouring the site: constraint are
       // skipped, so the retry lands on a different exit.
       const pool = proxies.filter((p) => !triedExits.has(p));
+      // A dork starts on the cheap surface, where the operator travels as
+      // as_sitesearch/as_filetype. When that surface does not honour it, every
+      // hit is off target and the next round asks for the modern surface.
+      const { url, geo } = googleLite.buildLiteUrl({
+        q: query,
+        num: Math.min(10, want - results.length),
+        start: base + page * 10,
+        hl,
+        gl,
+        tbs,
+        before,
+        after,
+        classic: dork ? round === 0 : true,
+      });
       try {
         pack = await googleLite.fetchGoogleLite({
           url,

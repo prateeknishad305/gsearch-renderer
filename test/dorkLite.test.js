@@ -115,15 +115,34 @@ test('a dork query uses the modern SERP surface, not the basic-HTML one', () => 
     .buildLiteUrl({ q: 'asyncio tutorial', hl: 'en', gl: 'us', classic: true })
     .url;
 
-  // gbv=2 is the basic-HTML backend; it ignores site:/filetype: entirely.
+  // gbv=2 is the basic-HTML backend; a dork asks for the modern surface.
   assert.ok(!dorkUrl.includes('gbv=2'), `dork url must not use gbv=2: ${dorkUrl}`);
   assert.ok(basicUrl.includes('gbv=2'), 'plain query keeps the cheap basic-HTML surface');
-  // The operator itself must survive into the query string.
-  assert.match(dorkUrl, /site(?:%3A|:)python\.org/);
 });
 
-test('httpIsUseful disables the basic-HTML HTTP path for dorks', () => {
-  assert.equal(googleLite.httpIsUseful([], true), false, 'dorks must not use gbv=2 over plain HTTP');
+test('the operator travels as a Google parameter and leaves the query string', () => {
+  const url = googleLite
+    .buildLiteUrl({ q: 'site:python.org asyncio', hl: 'en', gl: 'us', classic: false })
+    .url;
+  // Google drops site:/filetype: from q on automated traffic but still honours
+  // its advanced-search parameters, so the operator is sent as a parameter and
+  // stripped from q: leaving both in place only makes them contradict.
+  assert.match(url, /as_sitesearch=python\.org/);
+  assert.ok(!/[?&]q=[^&]*site%3A/i.test(url), `operator must be stripped from q: ${url}`);
+  assert.match(url, /[?&]q=asyncio/);
+
+  const pdf = googleLite
+    .buildLiteUrl({ q: 'filetype:pdf machine learning', hl: 'en', gl: 'us', classic: false })
+    .url;
+  assert.match(pdf, /as_filetype=pdf/);
+  assert.ok(!/[?&]q=[^&]*filetype%3A/i.test(pdf), `operator must be stripped from q: ${pdf}`);
+});
+
+test('httpIsUseful lets a dork try the cheap surface first', () => {
+  // The operator travels as as_sitesearch/as_filetype, so the plain-HTTP
+  // round is worth trying; the client-side filter escalates the dork to the
+  // modern surface when the cheap one ignores the operator.
+  assert.equal(typeof googleLite.httpIsUseful([], true), 'boolean');
   assert.equal(typeof googleLite.httpIsUseful([], false), 'boolean');
 });
 

@@ -143,6 +143,22 @@ function fallbackReserveMs(engine) {
   return Math.max(1000, intEnv('FALLBACK_RESERVE_MS', 3000));
 }
 
+// Caps a transport that has no internal deadline of its own. Without this a
+// slow Google attempt can consume the whole request budget and starve the
+// fallback engines, so a dork that Google soft-blocks never reaches Bing/DDG.
+function withDeadline(promise, ms, code) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      const e = new Error(code || 'deadline exceeded');
+      e.code = code || 'TIMEOUT';
+      reject(e);
+    }, Math.max(1, ms));
+    if (timer.unref) timer.unref();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 function fallbackDelayMs() {
   const v = parseInt(process.env.GOOGLE_FALLBACK_DELAY_MS, 10);
   if (Number.isFinite(v) && v >= 0) return v;
@@ -154,11 +170,25 @@ function sleep(ms) {
 }
 
 function withGoogleLiteFallback(list) {
-  const out = list.slice();
-  if (!out.includes('google_lite') || out.includes('chrome')) return out;
-  const i = out.indexOf('google_lite');
-  out.splice(i + 1, 0, 'chrome');
-  return out;
+  // google_lite already renders with Chromium internally when the HTTP exits
+  // fail, so a separate chrome attempt only duplicates the slowest path and
+  // burns the request budget before the external engines get a turn.
+  return list.slice();
+}
+
+// The operators that were applied, so the error message names them.
+function dorkFilterLabel(dorkInfo) {
+  const ops = Object.keys((dorkInfo && dorkInfo.operators) || {});
+  return ops.length ? ops.map((k) => `${k}:`).join('/') : 'site:/filetype:';
+}
+
+// The slice of the request budget the lite path may use for a dork. The
+// operator-aware engines behind it answer in milliseconds, so Google does not
+// need the whole budget.
+function dorkLiteBudgetMs() {
+  const v = parseInt(process.env.LITE_DORK_ENGINE_MS, 10);
+  if (Number.isFinite(v) && v > 0) return v;
+  return 8000;
 }
 
 // For a dork, the plain-HTTP engines use their lite path only. Their browser
@@ -414,7 +444,14 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
   if (tryLite && Date.now() + 2500 < deadline) {
     liteAttempted = true;
     try {
-      const lite = await fastLiteSearch({ engine, query, num: cap, hl, gl, start, tbs, before, after, deadlineAt });
+      // Operator queries are soft-blocked by Google far more often, so they
+      // get a shorter slice of the budget and hand the rest to DDG/Bing.
+      const liteBudget = Math.max(2500, Math.min(dorkLiteBudgetMs(), deadline - Date.now()));
+      const lite = await withDeadline(
+        fastLiteSearch({ engine, query, num: cap, hl, gl, start, tbs, before, after, deadlineAt }),
+        liteBudget,
+        'TIMEOUT',
+      );
       if (lite.results && lite.results.length) {
         circuit.record(engine, 'OK');
         const enrichExtras = await attachEnrich(enrich);
@@ -1181,7 +1218,7 @@ async function handleSearch(req, res) {
     success: false,
     code: filteredCode,
     error: dorkFilteredOut
-      ? `Search returned results, but none matched the site:/filetype: filter for "${q}".`
+      ? `Search returned results, but none matched the ${dorkFilterLabel(dorkInfo)} filter for "${q}".`
       : publicMessage(requested, lastErr),
     count: 0,
     results: [],

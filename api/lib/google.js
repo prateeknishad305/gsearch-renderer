@@ -3,7 +3,7 @@
 const net = require('net');
 const { URL } = require('url');
 const { isGarbageUrl, isAiModeTitle } = require('./resultFilter');
-const { parseDork, isHostSiteTarget } = require('./dork');
+const { parseDork, isHostSiteTarget, stripOperator } = require('./dork');
 
 function envFlag(name, dflt) {
   const raw = process.env[name];
@@ -112,15 +112,26 @@ function normalizeQuery(q) {
 
 function buildSearchUrl({ q, num, start, hl, gl, proxy, viewport, tbs, before, after }) {
   const geo = resolveGeo({ gl, hl, proxy });
-  const query = normalizeQuery(q);
+  let query = normalizeQuery(q);
   const p = new URLSearchParams();
-  p.set('q', query);
   p.set('hl', geo.hl);
   p.set('gl', geo.gl);
-  const siteTargets = parseDork(query).site_targets;
+  const dork = parseDork(query);
+  const siteTargets = dork.site_targets;
   if (siteTargets.length === 1 && isHostSiteTarget(siteTargets[0])) {
+    query = stripOperator(query, 'site');
     p.set('as_sitesearch', siteTargets[0]);
   }
+  const filetypes = []
+    .concat(dork.operators.filetype || [])
+    .concat(dork.operators.ext || [])
+    .concat(dork.operators.mime || [])
+    .filter(Boolean);
+  if (filetypes.length === 1) {
+    query = stripOperator(query, 'filetype');
+    p.set('as_filetype', String(filetypes[0]).replace(/^\./, '').toLowerCase());
+  }
+  p.set('q', query);
   const st = Math.max(0, Number(start) || 0);
   p.set('start', String(st));
   const n = Math.min(10, Math.max(1, Number(num) || 10));

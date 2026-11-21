@@ -26,7 +26,7 @@ const { URL } = require('url');
 const g = require('./google');
 const exitState = require('./exitState');
 const { buildTbs } = require('./googleExtract');
-const { parseDork, isHostSiteTarget } = require('./dork');
+const { parseDork, isHostSiteTarget, stripOperator } = require('./dork');
 
 const CHROME_MAJOR = '155';
 const UA =
@@ -66,9 +66,8 @@ function boolEnv(name, dflt) {
 // therefore ask for the modern surface instead.
 function buildLiteUrl({ q, num = 10, start = 0, hl, gl, tbs, before, after, proxy, classic = true } = {}) {
   const geo = g.resolveGeo({ gl, hl, proxy });
-  const query = g.normalizeQuery(q);
+  let query = g.normalizeQuery(q);
   const p = new URLSearchParams();
-  p.set('q', query);
   p.set('hl', geo.hl);
   p.set('gl', geo.gl);
   p.set('start', String(Math.max(0, Number(start) || 0)));
@@ -82,8 +81,25 @@ function buildLiteUrl({ q, num = 10, start = 0, hl, gl, tbs, before, after, prox
   // Google ignores num=10 and the parameter itself is a fingerprint, so it is
   // only sent when it actually changes the page size.
   if (n !== 10) p.set('num', String(n));
-  const targets = parseDork(query).site_targets.filter(isHostSiteTarget);
-  if (targets.length === 1) p.set('as_sitesearch', targets[0]);
+  // On automated traffic Google drops site:/filetype: from q but still honours
+  // its advanced-search parameters, so the operator travels as a parameter
+  // instead of contradicting itself inside the query string.
+  const dork = parseDork(query);
+  const targets = dork.site_targets.filter(isHostSiteTarget);
+  if (targets.length === 1) {
+    query = stripOperator(query, 'site');
+    p.set('as_sitesearch', targets[0]);
+  }
+  const filetypes = []
+    .concat(dork.operators.filetype || [])
+    .concat(dork.operators.ext || [])
+    .concat(dork.operators.mime || [])
+    .filter(Boolean);
+  if (filetypes.length === 1) {
+    query = stripOperator(query, 'filetype');
+    p.set('as_filetype', String(filetypes[0]).replace(/^\./, '').toLowerCase());
+  }
+  p.set('q', query);
   const tbsVal = buildTbs({ tbs, before, after });
   if (tbsVal) p.set('tbs', tbsVal);
   return { url: `https://${geo.host}/search?${p.toString()}`, geo };
@@ -522,14 +538,17 @@ async function fetchViaChrome(url, proxies, timeoutMs, budgetMs) {
 // straight to the browser. LITE_GOOGLE_HTTP=1 forces the HTTP path,
 // LITE_GOOGLE_HTTP=0 forces the browser.
 //
-// The plain-HTTP path also cannot serve a dork: Google's basic-HTML surface
-// does not honour site:, filetype: and the other classic operators, so a dork
-// fetched that way comes back unrestricted and is thrown away by the dork
-// filter. A dork therefore always needs the browser.
+// A dork can use the plain-HTTP path too: the operator is sent as Google's
+// advanced-search parameter instead of inside the query string, and the
+// caller checks every hit against the operator, so a surface that ignores it
+// is detected and escalated to the modern one.
 function httpIsUseful(proxies, dork) {
   const mode = String(process.env.LITE_GOOGLE_HTTP || 'auto').toLowerCase();
   if (mode === '0') return false;
-  if (dork) return false;
+  // A dork is worth a plain-HTTP round: the operator travels as Google's
+  // advanced-search parameter (as_sitesearch/as_filetype), which the cheap
+  // surface can honour. When it does not, the caller notices that every hit
+  // is off target and escalates to the modern surface.
   if (mode === '1') return true;
   try {
     const { partitionPool } = require('./proxyPool');
