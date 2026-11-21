@@ -560,6 +560,7 @@ const FIXES = [
 ];
 
 module.exports = {
+  ACCEPT,
   envFlag,
   intEnv,
   firstInt,

@@ -124,25 +124,23 @@ function googleStandalone() {
   return String(process.env.GOOGLE_STANDALONE || '0') !== '0';
 }
 
-function resolveTryList(engineList, query) {
+function resolveTryList(engineList, query, dorkInfo) {
   const noFallback = noFallbackRequested(query);
   if (noFallback) return { noFallback, tryList: engineList.slice() };
   if (googleStandalone() && engineList.length === 1 && isGoogleEngine(engineList[0])) {
     return { noFallback: true, tryList: engineList.slice() };
   }
-  return { noFallback, tryList: withFallbacks(engineList) };
+  return { noFallback, tryList: withFallbacks(engineList, dorkInfo) };
 }
 
 // Appends the fallback chain to an engine list, preserving order and dropping
 // duplicates. With AUTO_FALLBACK=0 the list is returned untouched.
-function fallbackDelayMs() {
-  const v = parseInt(process.env.GOOGLE_FALLBACK_DELAY_MS, 10);
-  if (Number.isFinite(v) && v >= 0) return v;
-  return 1500;
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+// How much of the request budget to keep for an engine that has not run yet.
+// The plain-HTTP engines answer in a fraction of a second; a browser render
+// needs seconds, so it is not reserved for.
+function fallbackReserveMs(engine) {
+  if (isGoogleEngine(engine)) return 0;
+  return Math.max(1000, intEnv('FALLBACK_RESERVE_MS', 3000));
 }
 
 // Caps a transport that has no internal deadline of its own. Without this a
@@ -161,6 +159,16 @@ function withDeadline(promise, ms, code) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+function fallbackDelayMs() {
+  const v = parseInt(process.env.GOOGLE_FALLBACK_DELAY_MS, 10);
+  if (Number.isFinite(v) && v >= 0) return v;
+  return 1500;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function withGoogleLiteFallback(list) {
   // google_lite already renders with Chromium internally when the HTTP exits
   // fail, so a separate chrome attempt only duplicates the slowest path and
@@ -168,18 +176,118 @@ function withGoogleLiteFallback(list) {
   return list.slice();
 }
 
-function withFallbacks(list) {
+// The operators that were applied, so the error message names them.
+function dorkFilterLabel(dorkInfo) {
+  const ops = Object.keys((dorkInfo && dorkInfo.operators) || {});
+  return ops.length ? ops.map((k) => `${k}:`).join('/') : 'site:/filetype:';
+}
+
+// The slice of the request budget the lite path may use for a dork. The
+// operator-aware engines behind it answer in milliseconds, so Google does not
+// need the whole budget.
+function dorkLiteBudgetMs() {
+  const v = parseInt(process.env.LITE_DORK_ENGINE_MS, 10);
+  if (Number.isFinite(v) && v > 0) return v;
+  return 8000;
+}
+
+// For a dork, the plain-HTTP engines use their lite path only. Their browser
+// fallback costs seconds and cannot add anything the operator-aware lite path
+// does not already have.
+function dorkLiteOnly(engine, dorkMode, liteOnly) {
+  if (liteOnly) return true;
+  if (!dorkMode) return false;
+  return !isGoogleEngine(engine);
+}
+
+// For a dork, the engines that honour site:/filetype: without a browser
+// answer in milliseconds, while the primary Google path needs a browser.
+// Racing them turns a slow chain into a fast answer without giving up the
+// primary engine: whoever produces on-target results first wins.
+async function raceDorkEngines(engines, ctx) {
+  const runs = engines.map((engine) =>
+    (async () => {
+      const r = await searchEngine({
+        engine,
+        query: adaptQuery(ctx.q, engine),
+        num: ctx.num,
+        pages: ctx.pages,
+        start: ctx.start,
+        hl: ctx.hl,
+        gl: ctx.gl,
+        proxy: ctx.proxy,
+        debug: ctx.debug,
+        autoPages: ctx.autoPages,
+        proxyless: ctx.proxyless,
+        liteOnly: dorkLiteOnly(engine, ctx.dorkMode, ctx.liteOnly),
+        renderOnly: ctx.renderOnly,
+        browser: ctx.browser,
+        deadlineAt: ctx.deadlineAt,
+        tbs: ctx.tbs,
+        before: ctx.before,
+        after: ctx.after,
+      });
+      let items = applyDomainFilters(r.results || [], ctx.resultFilters);
+      items = enforceDork(items, ctx.dorkInfo);
+      if (!items.length) {
+        const e = new Error(`Engine "${engine}" returned no on-target result`);
+        e.code = 'EMPTY_RESULTS';
+        throw e;
+      }
+      return { engine, r, items };
+    })(),
+  );
+  // The losers keep running in the background; absorb their rejections.
+  for (const p of runs) p.catch(() => {});
+  return new Promise((resolve, reject) => {
+    let pending = runs.length;
+    let lastErr = null;
+    for (const p of runs) {
+      p.then(
+        (value) => resolve(value),
+        (err) => {
+          lastErr = err;
+          pending -= 1;
+          if (pending === 0) reject(lastErr || new Error('no engine answered'));
+        },
+      );
+    }
+  });
+}
+
+function withFallbacks(list, dorkInfo) {
   const out = withGoogleLiteFallback(list);
   if (!autoFallbackEnabled()) return out;
   if (googleStandalone() && list.length === 1 && isGoogleEngine(list[0])) return out;
   const seen = new Set(out);
+  const chain = [];
   for (const e of AUTO_FALLBACK_CHAIN) {
     if (!seen.has(e)) {
       seen.add(e);
-      out.push(e);
+      chain.push(e);
     }
   }
-  return out;
+  // A dork query needs an engine that honours the operator. Google serves a
+  // degraded SERP without operator support on a share of its exits, so the
+  // operator-capable engines are tried before the (expensive) browser
+  // fallback, and long before the budget runs out.
+  if (dorkInfo && dorkInfo.has_operators) {
+    const sites = dorkInfo.site_targets || [];
+    const capable = chain.filter((e) => {
+      if (!sites.length) return true;
+      return engineSupport(e, dorkInfo).supported.includes('site');
+    });
+    if (capable.length) {
+      const chromeIdx = out.indexOf('chrome');
+      const insertAt = chromeIdx >= 0 ? chromeIdx : out.length;
+      out.splice(insertAt, 0, ...capable);
+      for (const e of capable) {
+        const i = chain.indexOf(e);
+        if (i >= 0) chain.splice(i, 1);
+      }
+    }
+  }
+  return out.concat(chain);
 }
 
 // Codes that mean "this engine could not be fetched from here" rather than a
@@ -305,7 +413,6 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
     Date.now() + requestTimeoutMs(),
     deadlineAt || Date.now() + requestTimeoutMs()
   );
-  const dorkQuery = parseDork(query).has_operators;
 
   // Official Google Custom Search JSON API: datacenter-friendly, no proxies.
   // Used as the primary Google path when GOOGLE_CSE_KEY + GOOGLE_CSE_CX are set.
@@ -333,14 +440,18 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
 
   const tryLite = !renderOnly && (liteOnly || (!debug && liteEnabled(engine)));
   let liteAttempted = false;
+  let liteError = null;
   if (tryLite && Date.now() + 2500 < deadline) {
     liteAttempted = true;
     try {
-      const litePromise = fastLiteSearch({ engine, query, num: cap, hl, gl, start, tbs, before, after });
       // Operator queries are soft-blocked by Google far more often, so they
       // get a shorter slice of the budget and hand the rest to DDG/Bing.
-      const liteBudget = Math.max(2500, Math.min(dorkQuery ? 9000 : Infinity, deadline - Date.now()));
-      const lite = await withDeadline(litePromise, liteBudget, 'TIMEOUT');
+      const liteBudget = Math.max(2500, Math.min(dorkLiteBudgetMs(), deadline - Date.now()));
+      const lite = await withDeadline(
+        fastLiteSearch({ engine, query, num: cap, hl, gl, start, tbs, before, after, deadlineAt }),
+        liteBudget,
+        'TIMEOUT',
+      );
       if (lite.results && lite.results.length) {
         circuit.record(engine, 'OK');
         const enrichExtras = await attachEnrich(enrich);
@@ -359,13 +470,25 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
         };
       }
     } catch (err) {
+      liteError = err;
       if (liteOnly || skipRender(engine) || (engine !== 'google' && isHardBlock(err))) {
         if (err && err.code) throw err;
-        const e = new Error(`Engine "${engine}" lite path empty`);
+        // Keep the cause: "lite path empty" on its own is impossible to act on.
+        const e = new Error(`Engine "${engine}" lite path empty: ${(err && err.message) || 'unknown'}`);
         e.code = 'LITE_EMPTY';
+        e.cause = err;
         throw e;
       }
     }
+  }
+  // The browser render is the expensive path. When this engine's slice of the
+  // request budget is already gone, the engines behind it must get their
+  // share: a dork that needs bing/duckduckgo has to reach them.
+  if (deadlineAt && Date.now() + 1200 >= deadlineAt) {
+    if (liteError && liteError.code) throw liteError;
+    const e = new Error(`Engine "${engine}" ran out of request budget`);
+    e.code = 'BUDGET_EXHAUSTED';
+    throw e;
   }
    if (liteOnly || skipRender(engine)) {
      const e = new Error(`Engine "${engine}" has no lite results`);
@@ -446,7 +569,7 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
       }
       localAttempts += 1;
       try {
-        const r = await runQuery({ engine, query, num: perPage, start: offset, hl, gl, proxy: candidate, debug, browser, tbs, before, after });
+        const r = await runQuery({ engine, query, num: perPage, start: offset, hl, gl, proxy: candidate, debug, browser, tbs, before, after, deadlineAt });
         if (candidate) googleIp.record(candidate, 'OK');
         return { pageResults: r.results, used: candidate, dur: r.duration_ms, extras: r.extras || null };
       } catch (caught) {
@@ -482,7 +605,7 @@ async function searchEngine({ engine, query, num, pages = 1, start = 0, hl = 'en
         if (candidate == null) continue;
         localAttempts += 1;
         try {
-        const r = await runQuery({ engine, query, num: perPage, start: offset, hl, gl, proxy: candidate, debug, browser, tbs, before, after });
+        const r = await runQuery({ engine, query, num: perPage, start: offset, hl, gl, proxy: candidate, debug, browser, tbs, before, after, deadlineAt });
           pageResults = r.results;
           dur = r.duration_ms;
           used = candidate;
@@ -849,38 +972,154 @@ async function handleSearch(req, res) {
   }
 
   const requested = engineList[0];
-  const { noFallback, tryList } = resolveTryList(engineList, req.query);
+  const { noFallback, tryList } = resolveTryList(engineList, req.query, dorkInfo);
   const attemptsDetail = [];
   let lastErr = new Error('no engine produced a result');
   // Set when an engine returned hits that the dork/domain filters removed.
   let dorkFilteredOut = false;
   const deadlineAt = Date.now() + searchBudgetMs();
   let prevEngine = null;
+  // The engines that already ran inside the dork race do not run again in the
+  // sequential pass: they had their chance and their budget.
+  const racedEngines = new Set();
   for (let ei = 0; ei < tryList.length; ei += 1) {
-    const engine = tryList[ei];
+    let engine = tryList[ei];
     if (Date.now() >= deadlineAt - 1500) break;
+    if (racedEngines.has(engine)) {
+      attemptsDetail.push({
+        engine,
+        success: false,
+        code: 'RACED_NO_MATCH',
+        duration_ms: 0,
+      });
+      continue;
+    }
+    // For a dork the browser fallback repeats what google_lite already tried
+    // on the same modern surface. Skipping it keeps a failing dork fast
+    // instead of paying for a second render.
+    if (dorkMode && engine === 'chrome' && engine !== requested) {
+      attemptsDetail.push({
+        engine,
+        success: false,
+        code: 'SKIPPED_DORK',
+        duration_ms: 0,
+      });
+      continue;
+    }
     if (prevEngine === 'google_lite' && engine === 'chrome') {
       const pause = fallbackDelayMs();
       if (pause && Date.now() + pause + 1500 < deadlineAt) await sleep(pause);
     }
     prevEngine = engine;
     const startedAt = Date.now();
-    // Reserve ~8s per remaining fallback engine so a slow first engine (Google
-    // on datacenter IPs) cannot consume the whole budget and starve the chain.
-    const remaining = tryList.length - ei - 1;
-    const reserve = remaining > 0 ? Math.min(remaining * 4000, Math.max(0, deadlineAt - startedAt - 4000)) : 0;
-    const engineDeadline = Math.min(deadlineAt, startedAt + Math.max(4000, deadlineAt - startedAt - reserve));
+    // Reserve a slice for every remaining fallback engine so a slow first
+    // engine (Google on datacenter IPs) cannot consume the whole budget and
+    // starve the chain. The plain-HTTP engines answer in well under a second,
+    // the browser paths need much more, so only the cheap ones are reserved.
+    const remaining = tryList.slice(ei + 1);
+    // For a dork the engines that honour site:/filetype: without a browser
+    // are the ones that can still answer, so they get a bigger slice.
+    const reserve = remaining.reduce((sum, e) => {
+      const base = fallbackReserveMs(e);
+      const capable = dorkMode && engineSupport(e, dorkInfo).supported.includes('site');
+      return sum + (capable ? base * 2 : base);
+    }, 0);
+    let engineDeadline = Math.min(deadlineAt, startedAt + Math.max(3000, deadlineAt - startedAt - reserve));
+    if (dorkMode && engine === 'google_lite') {
+      // Google honours site: only on the exits that serve the modern surface
+      // to a clean IP. The browser path must not starve bing/duckduckgo, which
+      // honour the operator without a browser.
+      const cap = Math.max(3000, intEnv('LITE_DORK_ENGINE_MS', 8000));
+      engineDeadline = Math.min(engineDeadline, startedAt + cap);
+    }
     try {
       const engineQuery = dorkMode ? adaptQuery(q, engine) : q;
-      const r = await searchEngine({ engine, query: engineQuery, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless, liteOnly, renderOnly, browser, deadlineAt: engineDeadline, tbs, before, after });
-      const fetched = (r.results || []).length;
-      let results = shodanOptionsActive(shodanOpts)
-        ? applyShodanOptions(r.results, shodanOpts)
-        : r.results;
-      results = applyDomainFilters(results, resultFilters);
-      if (dorkMode) results = enforceDork(results, dorkInfo);
-      if (wantDedupe) results = dedupeResults(results, num);
-      results = withRanks(results);
+      // Google only honours site: on a share of the exits that serve it, so a
+      // dork that comes back with nothing on target is retried on another exit
+      // before the engine is given up on.
+      const engineTries = dorkMode ? Math.max(1, intEnv('DORK_RETRIES', 2)) : 1;
+      let r = null;
+      let results = [];
+      let fetched = 0;
+      let raced = false;
+      // The dork race: the primary engine and the engines that honour the
+      // operator without a browser go at the same time. Google only answers
+      // site: from a share of its exits, and it needs a browser to do it, so
+      // waiting for it before asking bing means a slow answer to a question
+      // bing can answer in a fraction of a second.
+      const dorkRace =
+        dorkMode && dorkInfo.has_operators && ei === 0 && !noFallback
+          ? [engine].concat(
+              tryList
+                .slice(1)
+                .filter(
+                  (e) =>
+                    // The chrome engine is the browser fallback: racing it
+                    // with google_lite only makes two renders compete for the
+                    // same pool. The plain-HTTP engines are the interesting
+                    // opponents, they answer in milliseconds.
+                    e !== 'chrome' &&
+                    engineSupport(e, dorkInfo).supported.includes('site'),
+                ),
+            )
+          : null;
+      if (dorkRace && dorkRace.length > 1) {
+        // Whatever happens, these engines have had their chance: they must
+        // not run a second time in the sequential pass.
+        for (const e of dorkRace) racedEngines.add(e);
+        try {
+          const winner = await raceDorkEngines(dorkRace, {
+            q,
+            dorkInfo,
+            dorkMode,
+            num,
+            pages,
+            start,
+            hl,
+            gl,
+            proxy,
+            debug,
+            autoPages,
+            proxyless,
+            liteOnly: dorkLiteOnly(engine, dorkMode, liteOnly),
+            renderOnly,
+            browser,
+            deadlineAt: engineDeadline,
+            tbs,
+            before,
+            after,
+          });
+          engine = winner.engine;
+          r = winner.r;
+          results = winner.items;
+          fetched = (r.results || []).length;
+          raced = true;
+        } catch (raceErr) {
+          lastErr = raceErr && raceErr.code ? raceErr : Object.assign(new Error('no engine answered the dork'), { code: 'EMPTY_RESULTS' });
+        }
+      }
+      for (let attempt = 0; attempt < engineTries; attempt += 1) {
+        // A raced winner already carries its result object; the normal path
+        // still has to fetch one.
+        if (r === null) {
+          r = await searchEngine({ engine, query: engineQuery, num, pages, start, hl, gl, proxy, debug, autoPages, proxyless, liteOnly: dorkLiteOnly(engine, dorkMode, liteOnly), renderOnly, browser, deadlineAt: engineDeadline, tbs, before, after });
+        }
+        fetched = (r.results || []).length;
+        results = shodanOptionsActive(shodanOpts)
+          ? applyShodanOptions(r.results, shodanOpts)
+          : r.results;
+        results = applyDomainFilters(results, resultFilters);
+        if (dorkMode) results = enforceDork(results, dorkInfo);
+        if (wantDedupe) results = dedupeResults(results, num);
+        results = withRanks(results);
+        if (results.length > 0 || fetched === 0) break;
+        if (attempt < engineTries - 1) {
+          // The engine did answer, every hit was dropped by the site:/filetype:
+          // filter. Try another exit before calling it a failure.
+          dorkFilteredOut = true;
+          if (Date.now() >= engineDeadline - 1000) break;
+        }
+      }
       if (results.length === 0 && fetched > 0) {
         // The engine did answer, every hit was dropped by the site:/filetype:
         // filter. That is a real answer, not an unreachable engine.
@@ -901,6 +1140,7 @@ async function handleSearch(req, res) {
         success: true,
         code: 'OK',
         duration_ms: r.duration_ms,
+        ...(raced ? { raced: true } : {}),
       });
       const body = {
         engine,
@@ -966,11 +1206,9 @@ async function handleSearch(req, res) {
     duration_ms: Date.now() - t0,
     code: lastErr.code || 'ERROR',
   });
-  // When an engine answered but every hit was removed by the dork filter, say
-  // so instead of claiming the engine could not be reached.
+  // When an engine answered but every hit was removed by the site:/filetype:
+  // filter, say so instead of claiming the engine could not be reached.
   const filteredCode = dorkFilteredOut ? 'EMPTY_RESULTS' : publicCode(lastErr.code);
-  const dorkOps = Object.keys(dorkInfo.operators || {});
-  const filterLabel = dorkOps.length ? dorkOps.map((k) => `${k}:`).join('/') : 'dork';
   const failed = {
     engine: requested,
     requested_engine: requested,
@@ -980,7 +1218,7 @@ async function handleSearch(req, res) {
     success: false,
     code: filteredCode,
     error: dorkFilteredOut
-      ? `Search returned results, but none matched the ${filterLabel} filter for "${q}".`
+      ? `Search returned results, but none matched the ${dorkFilterLabel(dorkInfo)} filter for "${q}".`
       : publicMessage(requested, lastErr),
     count: 0,
     results: [],
