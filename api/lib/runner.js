@@ -285,7 +285,7 @@ async function renderOnPage({ engine, cfg, page, context, num, hl, gl, debug, pr
 }
 
 async function runQuery(opts) {
-  const { engine, query, num = 10, start = 0, hl = 'en', gl = 'us', proxy, debug, browser, tbs, before, after } = opts;
+  const { engine, query, num = 10, start = 0, hl = 'en', gl = 'us', proxy, debug, browser, tbs, before, after, deadlineAt } = opts;
   const cfg = ENGINES[engine];
   if (!cfg) {
     const e = new Error(`Unknown engine "${engine}". Available: ${Object.keys(ENGINES).join(', ')}`);
@@ -294,10 +294,13 @@ async function runQuery(opts) {
   }
   const google = engine === 'google' || engine === 'google_lite' || engine === 'chrome';
   const url = cfg.url({ q: query, num, start, hl, gl, proxy, tbs, before, after });
-  const navMs = google ? g.navTimeoutMs() : NAV_TIMEOUT_MS;
+  // A render must fit into the engine's slice of the request budget, otherwise
+  // it consumes the whole budget and the remaining engines never run.
+  const remaining = deadlineAt ? Math.max(0, deadlineAt - Date.now()) : Infinity;
+  const navMs = Math.max(1500, Math.min(google ? g.navTimeoutMs() : NAV_TIMEOUT_MS, remaining));
 
   const exec = async () =>
-    withPage({ proxy, hl, gl, google, navMs, browser }, async (page, context) =>
+    withPage({ proxy, hl, gl, google, navMs, browser, checkoutMs: Math.max(1000, remaining) }, async (page, context) =>
       renderOnPage({
         engine,
         cfg: { ...cfg, url, skipHome: start > 0 },

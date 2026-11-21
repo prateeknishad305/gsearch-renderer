@@ -57,7 +57,14 @@ function boolEnv(name, dflt) {
 
 // Builds a geo-correct Google lite URL. Mirrors google.buildSearchUrl so the
 // plain-HTTP path and the Chromium path target exactly the same SERP.
-function buildLiteUrl({ q, num = 10, start = 0, hl, gl, tbs, before, after, proxy } = {}) {
+// Builds a geo-correct Google lite URL. Mirrors google.buildSearchUrl so the
+// plain-HTTP path and the Chromium path target exactly the same SERP.
+//
+// `classic` adds gbv=2, Google's basic-HTML surface. That surface is much
+// cheaper to fetch and parse, but it does not honour the classic search
+// operators: a `site:` dork comes back as an unrestricted SERP. Dork queries
+// therefore ask for the modern surface instead.
+function buildLiteUrl({ q, num = 10, start = 0, hl, gl, tbs, before, after, proxy, classic = true } = {}) {
   const geo = g.resolveGeo({ gl, hl, proxy });
   const query = g.normalizeQuery(q);
   const p = new URLSearchParams();
@@ -65,9 +72,12 @@ function buildLiteUrl({ q, num = 10, start = 0, hl, gl, tbs, before, after, prox
   p.set('hl', geo.hl);
   p.set('gl', geo.gl);
   p.set('start', String(Math.max(0, Number(start) || 0)));
-  // gbv=2 is Google's basic-HTML surface: it is a much smaller page, it does
-  // not need JavaScript to contain the results, and it is far cheaper to parse.
-  p.set('gbv', '2');
+  if (classic) {
+    // gbv=2 is Google's basic-HTML surface: it is a much smaller page, it
+    // does not need JavaScript to contain the results, and it is far cheaper
+    // to parse.
+    p.set('gbv', '2');
+  }
   const n = Math.min(10, Math.max(1, Number(num) || 10));
   // Google ignores num=10 and the parameter itself is a fingerprint, so it is
   // only sent when it actually changes the page size.
@@ -87,7 +97,9 @@ function geoFromUrl(url) {
     const hl = u.searchParams.get('hl') || 'en';
     const gl = u.searchParams.get('gl') || 'us';
     const { ACCEPT } = require('./google');
-    return { hl, gl, acceptLanguage: ACCEPT[hl] || ACCEPT.en };
+    // A missing entry must not swallow the locale itself.
+    const acceptLanguage = (ACCEPT && (ACCEPT[hl] || ACCEPT[hl.slice(0, 2)] || ACCEPT.en)) || 'en-US,en;q=0.9';
+    return { hl, gl, acceptLanguage };
   } catch {
     return { hl: 'en', gl: 'us', acceptLanguage: 'en-US,en;q=0.9' };
   }
@@ -465,21 +477,25 @@ function firstGood(tasks) {
 // Chromium fallback
 // ---------------------------------------------------------------------------
 
-async function fetchViaChrome(url, proxies, timeoutMs) {
+async function fetchViaChrome(url, proxies, timeoutMs, budgetMs) {
   const chromeFetch = require('./chromeFetch');
   if (!chromeFetch.fetchOn()) {
     const e = new Error('chrome fetch off');
     e.code = 'SKIP';
     throw e;
   }
-  const timeout = Math.max(8000, timeoutMs || intEnv('CHROME_FETCH_MS', 12000));
+  const budget = Math.max(0, Math.min(timeoutMs || intEnv('CHROME_FETCH_MS', 12000), budgetMs || Infinity));
+  // A render must never outlive the request budget, otherwise it eats the
+  // whole budget and the fallback engines never get a turn.
+  const timeout = Math.max(1500, budget);
+  const checkoutMs = Math.max(1000, Math.min(timeout, budgetMs || timeout));
   const list = (proxies || []).filter(Boolean).filter((p) => exitState.canUse(p));
   const workers = Math.max(1, Math.min(6, intEnv('CHROME_FETCH_WORKERS', 3)));
   // Without a usable exit, render on the host IP: on a residential or clean
   // machine that is the only way to get a SERP at all.
   const tries = list.length ? list.slice(0, workers) : [null];
-  const render = async (proxy) => {
-    const r = await chromeFetch.fetchHtml(url, { proxy, timeoutMs: timeout, engine: 'google' });
+  const render = async (proxy, checkoutMs, signal) => {
+    const r = await chromeFetch.fetchHtml(url, { proxy, timeoutMs: timeout, checkoutMs, signal, engine: 'google' });
     const html = r && r.html;
     if (!html || isGoogleBlocked(html, r.finalUrl)) {
       throw blockedError('chromium returned an interstitial');
@@ -494,7 +510,7 @@ async function fetchViaChrome(url, proxies, timeoutMs) {
   // first usable exit instead of the sum of all the broken ones.
   const { firstOk } = require('./proxyRace');
   try {
-    return await firstOk(tries.map((proxy) => () => render(proxy)));
+    return await firstOk(tries.map((proxy) => (signal) => render(proxy, checkoutMs, signal)));
   } catch (err) {
     throw err;
   }
@@ -505,10 +521,16 @@ async function fetchViaChrome(url, proxies, timeoutMs) {
 // before the browser fallback. Unless a residential exit is present, go
 // straight to the browser. LITE_GOOGLE_HTTP=1 forces the HTTP path,
 // LITE_GOOGLE_HTTP=0 forces the browser.
-function httpIsUseful(proxies) {
+//
+// The plain-HTTP path also cannot serve a dork: Google's basic-HTML surface
+// does not honour site:, filetype: and the other classic operators, so a dork
+// fetched that way comes back unrestricted and is thrown away by the dork
+// filter. A dork therefore always needs the browser.
+function httpIsUseful(proxies, dork) {
   const mode = String(process.env.LITE_GOOGLE_HTTP || 'auto').toLowerCase();
-  if (mode === '1') return true;
   if (mode === '0') return false;
+  if (dork) return false;
+  if (mode === '1') return true;
   try {
     const { partitionPool } = require('./proxyPool');
     return partitionPool(proxies || []).residential.length > 0;
@@ -540,29 +562,43 @@ async function fetchGoogleLite({
   allowDirect = true,
   allowChrome = true,
   prefer = null,
+  dork = false,
+  deadlineAt = 0,
 } = {}) {
   const headers = liteHeaders(geo);
   const errors = [];
+  // Clamp every transport to what is left of the request budget.
+  let budgetMs = deadlineAt ? Math.max(0, deadlineAt - Date.now()) : 0;
+  // A dork must leave room for the operator-capable engines further down the
+  // chain: a browser render that uses the whole budget leaves nothing for
+  // bing/duckduckgo, which are the engines that honour site: without a
+  // browser.
+  if (dork && budgetMs) {
+    const cap = Math.max(2000, intEnv('LITE_DORK_CHROME_MS', 6000));
+    budgetMs = Math.min(budgetMs, cap);
+  }
+  const httpTimeout = budgetMs ? Math.max(800, Math.min(timeoutMs, budgetMs)) : timeoutMs;
 
   const directAttempt = async () => {
-    const r = await fetchDirect(url, headers, timeoutMs);
+    const r = await fetchDirect(url, headers, httpTimeout);
     if (r.status < 200 || r.status >= 300) throw new Error(`direct answered with status ${r.status}`);
     if (isGoogleBlocked(r.html, r.finalUrl)) throw blockedError('direct returned an interstitial');
     if (!looksLikeSerp(r.html)) throw blockedError('direct returned no organic results');
     return { html: r.html, transport: 'direct', proxy: null };
   };
-  const exitsAttempt = () => raceExits(url, headers, proxies, timeoutMs);
-  const chromeAttempt = () => fetchViaChrome(url, proxies, timeoutMs);
+  const exitsAttempt = () => raceExits(url, headers, proxies, httpTimeout);
+  const chromeAttempt = () => fetchViaChrome(url, proxies, timeoutMs, budgetMs);
 
   let attempts;
   if (prefer === 'chrome') {
-    attempts = [chromeAttempt];
+    attempts = allowChrome ? [chromeAttempt] : [];
   } else if (prefer === 'proxy') {
     attempts = [exitsAttempt].concat(allowDirect ? [directAttempt] : []);
-  } else if (!httpIsUseful(proxies)) {
-    // No residential exit: plain HTTP cannot work, so do not spend a race on
-    // it. Go to the browser straight away.
-    attempts = [chromeAttempt];
+  } else if (!httpIsUseful(proxies, dork)) {
+    // No residential exit, or a dork the basic-HTML surface cannot serve:
+    // plain HTTP cannot work, so do not spend a race on it. Go to the browser
+    // straight away.
+    attempts = allowChrome ? [chromeAttempt] : [];
   } else {
     attempts = (allowDirect ? [directAttempt] : []).concat([exitsAttempt]);
   }
@@ -597,6 +633,7 @@ async function fetchGoogleLite({
 module.exports = {
   buildLiteUrl,
   geoFromUrl,
+  httpIsUseful,
   liteHeaders,
   isGoogleBlocked,
   looksLikeSerp,

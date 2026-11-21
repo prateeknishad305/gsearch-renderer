@@ -261,6 +261,7 @@ function extractFromHtml(html) {
       /<h3[^>]*>[\s\S]*?<(a\b[^>]*href="([^"]+)"[^>]*)>([\s\S]*?)<\/a>|<(a\b[^>]*href="([^"]+)"[^>]*)>[\s\S]*?<h3[^>]*>([\s\S]*?)<\/h3>/gi;
     let m;
     while ((m = re.exec(raw))) {
+      if (m[0] === "") re.lastIndex++;  // zero-length match would loop forever
       const tag = m[1] || m[4] || '';
       const href = m[2] || m[5] || '';
       const title = m[3] || m[6] || '';
@@ -281,6 +282,7 @@ function extractFromHtml(html) {
     const h3re = /<h3[^>]*>([\s\S]*?)<\/h3>/gi;
     let m;
     while ((m = h3re.exec(raw))) {
+      if (m[0] === "") h3re.lastIndex++;  // zero-length match would loop forever
       const after = raw.slice(m.index, m.index + 1800);
       const href = ((after.match(/href="([^"]+)"/i) || [])[1]) || '';
       const cite = ((after.match(/<cite[^>]*>([\s\S]*?)<\/cite>/i) || [])[1]) || '';
